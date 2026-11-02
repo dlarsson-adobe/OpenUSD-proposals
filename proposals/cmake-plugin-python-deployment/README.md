@@ -288,3 +288,19 @@ Why not `PXR_BINARIES`?
 It would mean tools only, which the name does not convey; `PXR_INSTALLABLE_TARGETS` allows "install everything" without deduplicating overlaps and stays forward-compatible with new roles.
 Why global properties rather than variables?
 A global property is visible from any directory, including the parent of a subproject, and reading it at the selection site avoids stale variable snapshots.
+
+### Consumer Install Utilities
+
+<!-- D02: replace this line with the section -->
+
+### Third-Party Plugins
+
+<!-- D03: replace this line with the section -->
+
+### Build Modes
+
+<!-- D04: replace this line with the Build Modes section -->
+
+### USD's Own Installs
+
+<!-- D04: replace this line with the USD's Own Installs section -->

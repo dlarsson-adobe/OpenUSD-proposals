@@ -93,4 +93,8 @@ A violation of any rule is an error.
 14. A `PXR_DEPLOYMENT_BINARY` that names a target which itself has `PXR_DEPLOYMENT_BINARY` is an indirect chain and is invalid.
 15. An inventory member that is not a known target is invalid.
 
-Consumer-function arguments and build-mode rules are added to this file by their sections.
+<!-- D02: replace this line with the consumer install utility tables -->
+
+<!-- D03: replace this line with the third-party plugin function tables -->
+
+<!-- D04: replace this line with the build mode tables -->
