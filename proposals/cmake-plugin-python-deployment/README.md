@@ -256,6 +256,7 @@ When the package loads, a helper named `pxr_resolve_installed_metadata` resolves
 Consumers read only `PXR_<X>`, in every consumption mode; in an imported package they see the resolved values.
 `PXR_INSTALLED_<X>` is part of the documented producer contract, because third-party producers emit it too.
 Installed content never depends on the producer's source or build tree.
+This separation is between in-tree and installed paths, not between Debug and Release configurations.
 
 The two representations are a deliberate design choice, not a requirement to preserve Adobe's prototype.
 CMake exports custom property values literally, so one stored path cannot describe both an in-tree source and its relocated installed copy.
@@ -331,6 +332,8 @@ Installation never builds anything implicitly and never silently omits missing i
 
 Configurations share content lists.
 Per-configuration binaries use native CMake per-configuration selection.
+Exported targets retain CMake's normal configuration-specific binary locations, such as `IMPORTED_LOCATION_DEBUG` and `IMPORTED_LOCATION_RELEASE`.
+Debug and Release can coexist when their distinct binaries and generated descriptors have distinct deployed paths; identical configuration-independent resources and Python files can share a path.
 Configuration-specific content variants are not proposed without a concrete case.
 
 Producers exclude tests and bytecode from the metadata and keep runtime data such as `codegenTemplates`.
@@ -338,11 +341,15 @@ Producers exclude tests and bytecode from the metadata and keep runtime data suc
 - **Why not one combined property, or a JSON encoding?**
   Separate list properties let consumers send each category to its own root with ordinary CMake list handling, while a combined or JSON value would need parsing in every consumer.
 - **Why not a role marker property?**
+  A role marker would explicitly label a target as a plugin, Python package or tool in an additional property.
   It would be a second source of truth beside the metadata, and third-party targets get their roles automatically from their metadata.
 - **Why not a prerequisite property?**
+  Such a property would list build targets that must run before generated resources or Python files can be installed.
   USD generates almost no deployable content at build time, and `add_dependencies` already expresses the rest, including on carriers.
 - **Why not generator expressions in exported values?**
   `EXPORT_PROPERTIES` rejects them, which is why exported file lists use the `PXR_INSTALLED_<X>` siblings.
+  This restriction concerns the custom deployment properties, not CMake's native Debug/Release target exports.
+  The installed siblings solve the source-tree versus install-tree path difference; configuration-specific binary locations keep using CMake's normal machinery.
 
 ### Inventories
 
@@ -974,6 +981,8 @@ Because `find_package` can prefer a CPS file and a CPS import neither runs `pxrC
 The schema and the exporter design belong to that follow-up proposal.
 
 Build-tree deployment, which stages plugins, resources and Python beside executables so that they run from the build tree, also matters to many projects.
+A goal for that work is a build directory that runs independently of the install directory, ideally matching the install layout so tests can run without a preceding installation.
+USD does not currently provide that self-contained layout consistently, and this proposal does not change it.
 It is a different and larger problem for USD than install-time deployment, so a separate proposal could address build-tree deployment and build on the same metadata.
 
 ## Out of Scope
@@ -982,7 +991,8 @@ This proposal does not cover the following, and most of these boundaries are alr
 
 - Deploying non-USD runtime library dependencies, for example through `file(GET_RUNTIME_DEPENDENCIES)`, is left to consumers, and the proposal states only the boundary ([Consumer Install Utilities](#consumer-install-utilities)).
 - Repairing the RPATHs or install names of arbitrary imported binaries is not attempted, because consumers supply loader-compatible binaries ([Consumer Install Utilities](#consumer-install-utilities)).
-- The utilities of this proposal do not stage files into the build tree, while build-tree deployment as a whole is left to a separate proposal under [Future Work](#future-work).
+- Making the build directory runnable independently of the install directory, matching the build and install layouts, and enabling tests without a preceding install pass are left to a separate build-tree deployment proposal under [Future Work](#future-work).
+  The utilities here install files; they do not stage them into the build tree.
 - Generating Python bytecode is not part of deployment ([Consumer Install Utilities](#consumer-install-utilities)).
 - There is no general guarantee for shared plugins loaded by a static-USD host, and no guarantee that the linker retains static code ([Build Modes](#build-modes)).
 - The consumer utilities do not deploy static archives, which stay with USD's own install ([Build Modes](#build-modes)).

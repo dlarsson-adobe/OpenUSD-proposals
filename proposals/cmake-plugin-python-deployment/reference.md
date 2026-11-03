@@ -143,6 +143,7 @@ Each argument means the same in every function that accepts it.
 | `USD_RUNTIME_DESTINATION` | Deployed directory of that binary, relative to the deployment root | None | Plugin registrations are selected | `pxr_install_targets`, `pxr_install_plugins` |
 
 An unknown keyword, or an argument the function does not accept, is an error, and every destination, defaults included, must stay beneath the deployment root.
+Native CMake configuration selection chooses Debug or Release binaries; coexistence requires distinct output paths for different binaries or descriptors, while identical configuration-independent content may share a path.
 
 ## Registration Rewriting
 
