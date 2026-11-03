@@ -1,6 +1,29 @@
 # Reference: Consistent Plugin and Python Deployment for Exported CMake Targets
 
 This file is the normative companion of [README.md](README.md), which explains the reasons behind these tables.
+It specifies proposed behavior, not APIs available in USD today; the unresolved third-party helper details are called out in [Third-Party Functions](#third-party-functions).
+Plugin dependency closure and its illustrative option are outside these core tables; see [the later-phase discussion](README.md#later-phase-plugin-dependency-closure).
+
+## Contents
+
+- [Installable Target Kinds](#installable-target-kinds)
+- [Deployment Properties](#deployment-properties)
+- [Plugin Load Modes](#plugin-load-modes)
+- [Inventories](#inventories)
+- [Metadata Validation Rules](#metadata-validation-rules)
+- [Install Functions](#install-functions)
+- [Install Arguments](#install-arguments)
+- [Registration Rewriting](#registration-rewriting)
+- [Python Parent Packages](#python-parent-packages)
+- [Install Diagnostics](#install-diagnostics)
+- [Third-Party Producer Obligations](#third-party-producer-obligations)
+- [Third-Party Functions](#third-party-functions)
+  - [pxr_set_deployment_metadata](#third-party-pxr_set_deployment_metadata)
+  - [pxr_resolve_installed_metadata](#third-party-pxr_resolve_installed_metadata)
+  - [pxr_register_targets](#third-party-pxr_register_targets)
+- [Build Mode Coverage](#build-mode-coverage)
+- [Physical Binary Resolution](#physical-binary-resolution)
+- [Discovery Anchors](#discovery-anchors)
 
 ## Installable Target Kinds
 
@@ -26,8 +49,9 @@ Metadata-only carriers are exported `INTERFACE` libraries.
 These target properties describe what a target needs alongside its binary.
 Producers set `PXR_INSTALLED_<X>` on their targets for export.
 Consumers read only the `PXR_<X>` names; in an imported package they see the values resolved from `PXR_INSTALLED_<X>` when the package loads.
+The in-tree file lists themselves are not exported: the producer exports their installed siblings, and package-load resolution restores the consumer-facing names.
 
-| Name | Set on | Value format | Exported as | Meaning |
+| Name | Set on | Value format | Exported representation | Meaning |
 |---|---|---|---|---|
 | `PXR_RESOURCE_FILES` | Any content owner | List of `<source>:<destination>`; absolute source; bundle-relative destination | `PXR_INSTALLED_RESOURCE_FILES` | Resource files, including registration descriptors |
 | `PXR_INSTALLED_RESOURCE_FILES` | Any content owner; set by the producer for export | List of `<source>:<destination>`; source relative to the installed prefix | Itself | Exported form of `PXR_RESOURCE_FILES`; resolved into it when the package loads |

@@ -8,6 +8,10 @@ Authors: David Larsson (Adobe)
 
 - [Introduction](#introduction)
 - [Problem Statement](#problem-statement)
+  - [Imported Consumers Cannot See Plugins or Python Modules](#imported-consumers-cannot-see-plugins-or-python-modules)
+  - [Subproject Consumers Get All of USD or Nothing](#subproject-consumers-get-all-of-usd-or-nothing)
+  - [Every Consumer Relies on Workarounds](#every-consumer-relies-on-workarounds)
+  - [Third-Party Plugins Have No Convention](#third-party-plugins-have-no-convention)
 - [Glossary](#glossary)
 - [Prior Art](#prior-art)
 - [Proposal](#proposal)
@@ -19,6 +23,9 @@ Authors: David Larsson (Adobe)
   - [Build Modes](#build-modes)
   - [USD's Own Installs](#usds-own-installs)
 - [Examples](#examples)
+  - [Imported Consumer](#imported-consumer)
+  - [Subproject Consumer](#subproject-consumer)
+  - [Third-Party Plugin](#third-party-plugin)
 - [Alternatives Considered](#alternatives-considered)
 - [Risks](#risks)
 - [Rollout Plan](#rollout-plan)
@@ -36,6 +43,10 @@ In practice, teams copy USD's install tree wholesale, point `PXR_PLUGINPATH_NAME
 We propose that USD describe these runtime files to CMake as metadata on its exported targets, and ship a small set of CMake functions that install selected libraries, plugins, tools and Python packages into a layout the consumer chooses.
 The same calls work whether a project imports USD with `find_package(pxr)`, adds it as a subproject, or builds it on its own, and plugins built outside USD's source tree can follow the same convention.
 The core of the proposal adds exports, this metadata and target inventories alongside USD's existing install rules, which stay unchanged; plugin dependency closure follows in a later phase.
+
+The sections below explain the proposed behavior; [reference.md](reference.md) collects the properties, function arguments and validation rules.
+All interfaces are proposed, not features available in USD today.
+The remaining helper-interface details are identified in [Third-Party Functions](reference.md#third-party-functions), and the acceptance boundary is set out in [Rollout Plan](#rollout-plan).
 
 ## Problem Statement
 
@@ -86,6 +97,8 @@ This glossary defines terms as this proposal uses them, and each entry links the
   Loading the module creates no install rules; see [Consumer Install Utilities](#consumer-install-utilities) and [Install functions](reference.md#install-functions).
 - **Consumption mode:** one of the three ways a project obtains USD's CMake targets: as the top-level build, where USD is the project being built and installed, as a subproject added with `add_subdirectory` or `FetchContent`, or imported with `find_package(pxr)` from an installed USD.
   See [Problem Statement](#problem-statement).
+- **Content bundle:** files whose relative layout is preserved when the consumer chooses a different destination root.
+  Resource destinations are bundle-relative, while Python file destinations are package-relative; see [Deployment Metadata](#deployment-metadata).
 - **Deployment inventory:** one of six global properties that list installable targets: five list targets by role, such as `PXR_PLUGIN_TARGETS`, while `PXR_INSTALLABLE_TARGETS` holds their union plus otherwise unclassified content carriers.
   Membership neither builds nor installs anything; see [Inventories](#inventories) and [the inventories reference](reference.md#inventories).
 - **Deployment metadata:** the small family of `PXR_` target properties that describe what a target needs alongside its binary: resource and Python files, Python package identity and extension, plugin registrations and load mode, and the deployment binary.
@@ -649,7 +662,8 @@ A reference to a target in another package follows the existing declared-depende
 Selecting a member includes its physical binary, but not the resources, registrations or Python packages of other members.
 Selecting the aggregate alone does not select the content of any member.
 When several selections bring the same shared aggregate, even across separate calls, it is deployed once; [Consumer Install Utilities](#consumer-install-utilities) covers this deduplication.
-Incompatible destinations or transformations for the same binary remain errors.
+Incompatible destinations or transformations for the same binary within one deployment layout remain errors.
+Installing the same target into distinct layouts is allowed.
 The association is neither required-plugin closure nor link-dependency scanning; required-plugin traversal is a separate later phase.
 Supplying `USD_RUNTIME_TARGET` selects no binary for installation.
 A member the consumer selects explicitly can still name that same target as its physical binary.
@@ -722,8 +736,9 @@ Nothing would then catch metadata that falls behind the install rules, and consu
 
 ## Examples
 
-The three examples below show the proposal working end to end, with concrete names and values chosen only for illustration.
-They assume a modular shared USD build on Windows, and they add no rules of their own: each one links to the section that defines the behavior it relies on.
+The three examples below illustrate the proposed deployment calls with concrete names and values.
+They assume a modular shared USD build on Windows; source generation, application installation and ordinary package setup are omitted from the snippets.
+Each example links to the section that defines the behavior it relies on.
 
 ### Imported Consumer
 
@@ -835,13 +850,14 @@ The keyword names of `pxr_set_deployment_metadata` and `pxr_resolve_installed_me
 The prefix comes from the config file's own location, so the resolver turns `PXR_INSTALLED_RESOURCE_FILES` into a `PXR_RESOURCE_FILES` entry that points into wherever the package was relocated.
 Loading the package enrolls nothing in the inventories, so a consumer that only links against the package sees no change.
 
-A consumer that wants to ship the plugin registers its target and installs it together with the runtime target it declares, using the same arguments as the imported example:
+A consumer that wants to ship the plugin registers its target and selects the USD libraries alongside it, using the same arguments as the imported example:
 
 ```cmake
 find_package(acmeUsdPlugins REQUIRED)
 pxr_register_targets(TARGETS acme::usdAcme)
+get_property(libraries GLOBAL PROPERTY PXR_LIBRARY_TARGETS)
 pxr_install_targets(
-  TARGETS plug acme::usdAcme
+  TARGETS ${libraries} acme::usdAcme
   DESTINATION app
   USD_RUNTIME_TARGET plug
   USD_RUNTIME_DESTINATION bin
@@ -850,72 +866,18 @@ pxr_install_targets(
 
 Registration here means enrollment in the inventories so that the plugin can be selected, not registration with USD's runtime plugin registry.
 The package's role lists have no defined variable names, so the consumer names the target directly; it could also read `PXR_PLUGIN_TARGETS` after the registration.
-The call selects `plug` explicitly, because `USD_RUNTIME_TARGET` installs nothing, and `plug` then goes to `app/bin`, which matches the declared runtime placement.
-`plug` is a USD library that may own registrations and Python content, so the call uses `pxr_install_targets` with the runtime and Python arguments rather than `pxr_install_plugins`.
-A real application would also select the libraries it links and that `plug` needs, for example the whole library inventory as in the imported example.
+The library inventory includes `plug` and the other USD libraries, keeping the application's link dependencies complete without relying on dependency scanning.
+`USD_RUNTIME_TARGET` installs nothing, so `plug` must be part of that selection; it goes to `app/bin`, matching the declared runtime placement.
+USD libraries may own registrations and Python content, so the call uses `pxr_install_targets` with the runtime and Python arguments rather than `pxr_install_plugins`.
 The plugin's DLL also goes to `app/bin`, and its resources go to its default bundle root, `app/lib/usd/usdAcme`.
 The deployed descriptor copy gets a `LibraryPath` rewritten for the deployed `usdAcme` binary, as [Registration rewriting](reference.md#registration-rewriting) describes for `LOADABLE` entries, and the discovery index includes the descriptors that this call selects.
 USD's plugin registry therefore finds the plugin from the deployed layout alone, with no `PXR_PLUGINPATH_NAME` at launch.
 
 ## Alternatives Considered
 
-Each alternative is argued where its decision is made, as a "Why" note at the end of the section that makes the decision.
-This section only recaps them in the order of the README, so a reader can see every rejected option in one place and follow the link to its argument.
-
-From [Installable Targets and Exports](#installable-targets-and-exports):
-
-- Attaching every item to the nearest library instead of using metadata-only carriers would make selection pull in unrelated content.
-- Exporting the existing custom targets is not possible, because CMake cannot export custom targets.
-
-From [Deployment Metadata](#deployment-metadata):
-
-- One combined property or a JSON encoding would need parsing in every consumer, while separate list properties work with ordinary CMake list handling.
-- A role marker property would be a second source of truth beside the metadata.
-- A prerequisite property is unnecessary, because USD generates almost no deployable content at build time and `add_dependencies` expresses the rest.
-- Generator expressions in exported values are rejected by `EXPORT_PROPERTIES`, which is why exported file lists have installed siblings.
-
-From [Inventories](#inventories):
-
-- Extending `PXR_LIBRARIES` would break existing consumers of a link list that may contain raw system library names.
-- A `PXR_BINARIES` inventory would suggest tools only, while `PXR_INSTALLABLE_TARGETS` covers everything and stays forward-compatible with new roles.
-- Variables instead of global properties would not be visible from the parent of a subproject and could leave stale snapshots.
-
-From [Consumer Install Utilities](#consumer-install-utilities):
-
-- An install-all mode, or install rules created when the package loads, would give package loading side effects and deploy content the consumer did not select.
-- A Python forwarding option on plugin installation would let one call quietly install a second category that has its own roots and required arguments.
-- A nested per-target override map would need its own syntax and parsing, while separate calls reuse one argument vocabulary.
-- A wildcard layout or `PXR_PLUGINPATH_NAME` would tie a deployment to one fixed layout or to environment setup at every launch, unlike a generated relocatable index.
-- Regenerating `pxr/__init__.py` for the selected subset would give the same package different contents in different deployments.
-- Modifying producer descriptors would change files that the build tree, the installed USD and every deployment share.
-
-From [Third-Party Plugins](#third-party-plugins):
-
-- The property contract alone, without a helper, leaves producers to get several interacting rules right unaided, so USD also offers an optional validating helper.
-- A mandatory helper or a public `pxr_plugin` would constrain the many existing ways third-party projects build and install plugins.
-- Requiring identical build and import names would exclude the many packages that use export namespaces or `EXPORT_NAME`.
-- Leaving reference resolution to consumers or to a later revision would make every consumer learn each producer's export naming and leave imported metadata unusable.
-- Guessing namespaces or loading dependency packages implicitly could pick the wrong target silently and hide dependencies the package config should declare.
-- Enrolling targets as a side effect of authoring would change the inventories for consumers that never asked for those targets.
-- Letting only consumers enroll targets would prevent a third-party subproject from registering the targets it knows best.
-- Enrolling on package load would grow the inventories for every package that a consumer loads only to link a library.
-
-From [Build Modes](#build-modes):
-
-- Letting the aggregate list its members would add a second source of truth beside each member's own reference to its binary.
-- Rewriting the `LibraryPath` of core members to the shared aggregate is unnecessary, because the aggregate is already loaded when its code runs.
-- Deploying static archives through the consumer utilities would be a new feature rather than metadata for existing behavior, and USD's own install already handles archives.
-- Assuming discovery is always relative to the executable fails when static USD is embedded in a shared library, so the consumer names the actual host.
-
-From [USD's Own Installs](#usds-own-installs):
-
-- Switching USD's install rules to the metadata now would change a working install for every user at once, while the CI check already gives the same confidence.
-- Adding the metadata without a check would let it fall behind the install rules without any warning.
-
-From [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure):
-
-- Walking link edges to find required plugins would miss runtime-only edges and `MODULE` plugins.
-- Parsing `PluginDependencies` from `plugInfo.json` would rely on runtime data that cannot name typeless plugins and would need a mapping from USD type names to target names.
+The "Why" notes in [Installable Targets and Exports](#installable-targets-and-exports), [Deployment Metadata](#deployment-metadata) and [Inventories](#inventories) explain the rejected target, encoding and inventory alternatives.
+[Consumer Install Utilities](#consumer-install-utilities) and [Third-Party Plugins](#third-party-plugins) cover implicit installation, fixed layouts, descriptor mutation, mandatory build helpers and package-load enrollment.
+[Build Modes](#build-modes), [USD's Own Installs](#usds-own-installs) and [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure) cover aggregate membership, archive deployment, replacing existing installs and deriving runtime plugin dependencies.
 
 ## Risks
 
@@ -954,10 +916,12 @@ We propose to land the core in five ordered steps, each useful and reviewable on
 3. Add the inventories described in [Inventories](#inventories).
    They let consumers discover the installable targets in every consumption mode, and their membership can be checked against the targets and metadata already in place.
 4. Ship `pxrInstall.cmake` with the functions described in [Consumer Install Utilities](#consumer-install-utilities).
+   Include `pxr_resolve_installed_metadata` and wire USD's package config to resolve USD's own exported metadata before consumers use those functions.
    With this step consumers can deploy selected USD content into a layout of their choice, which is where the earlier steps pay off end to end.
-5. Ship the third-party helpers described in [Third-Party Plugins](#third-party-plugins), and wire USD's package config to call `pxr_resolve_installed_metadata` for USD's own targets.
-   Until then, step 2 lands and validates the raw exported metadata.
-   The helpers build on the published contract and the utilities, so they can be reviewed separately once both have landed.
+5. Complete the third-party helpers described in [Third-Party Plugins](#third-party-plugins) with `pxr_set_deployment_metadata` and `pxr_register_targets`, and document the resolver for outside producers.
+   These helpers build on the published contract, the resolver and the utilities, so they can be reviewed separately once those have landed.
+
+Step 2 lands and validates the raw exported metadata; package-load resolution must be in place by step 4 so imported deployment works before the remaining third-party helpers land.
 
 Build-mode coverage is part of the core metadata described in [Build Modes](#build-modes), not a separate step.
 
@@ -981,7 +945,8 @@ Its values name targets the way `INTERFACE_LINK_LIBRARIES` does, so they may nam
 These target references follow the same export and resolution contract as the other target references, so they resolve through `pxr_resolve_installed_metadata` and the producer's export-name mapping, as [Third-Party Plugins](#third-party-plugins) anticipates.
 
 Closure is a consumer opt-in.
-The later proposal would add `WITH_PLUGIN_DEPENDENCIES`, already reserved for this purpose on `pxr_install_targets` and `pxr_install_plugins`, while `pxr_install_python_packages` gets no closure option.
+The later proposal would add `WITH_PLUGIN_DEPENDENCIES` to `pxr_install_targets` and `pxr_install_plugins`, while `pxr_install_python_packages` gets no closure option.
+The option is not part of the core install arguments.
 With the option, traversal starts from the supplied targets, follows the required edges safely through cycles, and adds the binary, resource and registration content of every plugin it reaches, but not their Python packages.
 A dependency on a target that does not exist is an error, and so is a dependency on a target that is not a plugin.
 Without the option, consumers select extra plugins explicitly, which is also how the core behaves.
