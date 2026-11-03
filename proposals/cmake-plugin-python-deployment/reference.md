@@ -1,4 +1,4 @@
-# Reference: Consistent Plugin and Python Deployment for Exported CMake Targets
+# Reference: OpenUSD Deployment with CMake
 
 This file is the normative companion of [README.md](README.md), which explains the reasons behind these tables.
 It specifies proposed behavior, not APIs available in USD today; the unresolved third-party helper details are called out in [Third-Party Functions](#third-party-functions).

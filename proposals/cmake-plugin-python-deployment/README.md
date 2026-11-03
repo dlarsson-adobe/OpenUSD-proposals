@@ -1,4 +1,4 @@
-# Consistent Plugin and Python Deployment for Exported CMake Targets
+# OpenUSD Deployment with CMake
 
 Status: Draft
 
