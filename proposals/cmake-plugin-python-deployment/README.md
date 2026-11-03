@@ -93,6 +93,7 @@ The build provides no shared contract for this work, so teams maintain their own
 Plugins built outside the USD source tree face the same problem with no shared answer.
 They cannot reuse USD's `pxr_plugin` macros, because USD does not install them, so each project invents its own way to install binaries, resources, registrations and Python bindings.
 An application that combines several such plugins must then learn and handle each convention separately, on top of the work it already does for USD itself.
+That integration cost creates friction for a healthy third-party plugin ecosystem: adopting another plugin should not require another deployment mechanism.
 
 ## Glossary
 
@@ -133,7 +134,7 @@ This glossary defines terms as this proposal uses them, and each entry links the
 - **Plugin load mode:** the value of the required `PXR_PLUGIN_LOAD_MODE` property, `LOADABLE`, `BUILTIN` or `RESOURCE_ONLY`, which states how a plugin's code reaches the process and so decides what happens to `LibraryPath`.
   See [Deployment Metadata](#deployment-metadata) and [Plugin load modes](reference.md#plugin-load-modes).
 - **Registration descriptor:** a `plugInfo.json` file that registers plugins and that its owner names in `PXR_PLUGIN_REGISTRATIONS`.
-  Not every file named `plugInfo.json` is one, because `usd`'s `codegenTemplates/plugInfo.json` is a template; see [Deployment Metadata](#deployment-metadata).
+  Ownership is explicit rather than inferred from the filename; see [Deployment Metadata](#deployment-metadata).
 - **Registration entry:** one entry in the `Plugins` list of a registration descriptor.
   An owner owns every entry of a descriptor, or only the entry it names with the `<descriptor>:<Name>` form; see [Deployment Metadata](#deployment-metadata).
 - **Regular parent package:** a parent Python package whose owner's files include `__init__.py`, which is copied unchanged and has exactly one authoritative provider.
@@ -176,20 +177,8 @@ Some packages instead publish package-level path variables, such as `MATERIALX_S
 Such variables work only for imported consumption and describe whole directories, so they cannot select individual plugins, which is why this proposal puts metadata on targets instead.
 
 This proposal was motivated by and prototyped in Adobe's internal USD fork and build tooling.
-The fork added per-target properties for resource files, Python files and the Python package, and it exported installed-path siblings for resource and Python files that its package config maps back to absolute paths when the package loads.
-It also exported plugin and tool targets, and consumer-side CMake helpers rewrite the `Root`, `ResourcePath` and `LibraryPath` of a plugin's `plugInfo.json` for the consumer's layout and install Python content.
-The export of C++ tool targets is the first slice proposed upstream, in [PixarAnimationStudios/OpenUSD#4300](https://github.com/PixarAnimationStudios/OpenUSD/pull/4300).
-The fork worked under narrower constraints, with vcpkg packaging, Python always enabled, non-monolithic builds and one set of applications, so we rechecked each rule for generality.
-As a result, the proposal differs from the fork in these ways:
-
-- Names carry the `PXR_` prefix, because unprefixed names sit too close to CMake's built-in `RESOURCE`.
-- Registrations are explicit in `PXR_PLUGIN_REGISTRATIONS` with a required load mode, instead of treating a file named `plugInfo.json` as the registration and rewriting only its first `Plugins` entry.
-- Metadata lists carry no `no_subst` flag.
-- Metadata-only carriers describe content that has no binary.
-- Global inventories advertise the installable targets.
-- A generated relocatable discovery index replaces globbing for a root `plugInfo.json`.
-- An explicit mapping to export names resolves target references after import.
-- Logical owners and `PXR_DEPLOYMENT_BINARY` cover monolithic and static builds.
+That work demonstrated target-based metadata and consumer-controlled plugin and Python deployment.
+This proposal generalizes those ideas across consumption modes, build modes and third-party producers, rather than adopting the fork's constraints or private conventions.
 
 The Common Package Specification is left to [Future Work](#future-work).
 
@@ -233,10 +222,10 @@ Resources, registrations and Python ownership stay on the logical owners and are
 The change adds exports and metadata only.
 USD's own install layout and install rules stay as they are; [USD's Own Installs](#usds-own-installs) covers how they relate.
 
-Why carriers rather than attaching everything to the nearest library?
-A pure-Python package or a resource-only plugin can be selected without any particular library, and attaching it to one would make selection pull in unrelated content.
-Why not export the existing custom targets?
-CMake cannot export custom targets, so an `INTERFACE` library is the only exportable target without a binary.
+- **Why carriers rather than attaching everything to the nearest library?**
+  A pure-Python package or a resource-only plugin can be selected without any particular library, and attaching it to one would make selection pull in unrelated content.
+- **Why not export the existing custom targets?**
+  CMake cannot export custom targets, so an `INTERFACE` library is the only exportable target without a binary.
 
 ### Deployment Metadata
 
@@ -255,8 +244,7 @@ File lists use `<source>:<destination>` entries.
 For `PXR_RESOURCE_FILES` the destination is relative to the target's resource bundle.
 For `PXR_PYTHON_FILES` it is relative to the Python package.
 Windows drive letters in sources are preserved, and entries follow documented CMake list escaping.
-The producer macro option `no_subst` stays a producer detail and does not appear in these lists.
-It is not needed there: ordinary resources are copied unchanged, and declared registrations are rewritten.
+Ordinary resources are copied unchanged, and declared registrations are rewritten.
 
 In the top-level build and subproject modes, `PXR_<X>` holds absolute source locations.
 Authored files point into the source tree, and configured files such as `plugInfo.json` point into the build tree.
@@ -268,6 +256,11 @@ When the package loads, a helper named `pxr_resolve_installed_metadata` resolves
 Consumers read only `PXR_<X>`, in every consumption mode; in an imported package they see the resolved values.
 `PXR_INSTALLED_<X>` is part of the documented producer contract, because third-party producers emit it too.
 Installed content never depends on the producer's source or build tree.
+
+The two representations are a deliberate design choice, not a requirement to preserve Adobe's prototype.
+CMake exports custom property values literally, so one stored path cannot describe both an in-tree source and its relocated installed copy.
+Separate producer-side values avoid custom export-file generation and let consumers read the same resolved property in every mode.
+The tradeoff is additional producer bookkeeping, including the package-load resolver; [Prior Art](#prior-art) contrasts VTK's generated-property approach.
 
 Consumers choose independent destination roots per target and per content category.
 Bundle-relative and package-relative layout is preserved under those roots.
@@ -283,9 +276,9 @@ Each entry is bundle-relative and takes one of two forms:
 The property is exported as-is.
 A registration is what makes a target a plugin; there is no separate role marker.
 
-Registrations are explicit for three reasons:
+Registrations are explicit because:
 
-- Not every file named `plugInfo.json` is a registration descriptor; `usd`'s `codegenTemplates/plugInfo.json` is a template that must not be rewritten.
+- A filename alone does not identify which entries a target owns or which of them the consumer selected.
 - One bundle can register several plugins on one binary, so registration entries cannot be derived from targets one to one.
 - Resource-only plugins have no `LibraryPath`, so the absence of a binary must be stated rather than guessed.
 
@@ -299,6 +292,7 @@ It states how the plugin's code reaches the process, which decides what happens 
 
 - `LOADABLE`: the code is in a runtime-loadable shared binary; consumers rewrite `LibraryPath` for that binary and layout.
 - `BUILTIN`: the code is already linked into or loaded by the consumer; `LibraryPath` stays empty, even when the code lives in a shared aggregate.
+  Core plugins in a shared monolithic `usd_m` are one example; statically linked plugins are another, so the mode does not imply monolithic linking.
 - `RESOURCE_ONLY`: there is no code binary; consumers never invent a `LibraryPath`.
 
 A `BUILTIN` or `RESOURCE_ONLY` entry that ships a nonempty `LibraryPath` contradicts its mode and is an error.
@@ -341,14 +335,14 @@ Configuration-specific content variants are not proposed without a concrete case
 
 Producers exclude tests and bytecode from the metadata and keep runtime data such as `codegenTemplates`.
 
-Why not one combined property, or a JSON encoding?
-Separate list properties let consumers send each category to its own root with ordinary CMake list handling, while a combined or JSON value would need parsing in every consumer.
-Why not a role marker property?
-It would be a second source of truth beside the metadata, and third-party targets get their roles automatically from their metadata.
-Why not a prerequisite property?
-USD generates almost no deployable content at build time, and `add_dependencies` already expresses the rest, including on carriers.
-Why not generator expressions in exported values?
-`EXPORT_PROPERTIES` rejects them, which is why exported file lists use the `PXR_INSTALLED_<X>` siblings.
+- **Why not one combined property, or a JSON encoding?**
+  Separate list properties let consumers send each category to its own root with ordinary CMake list handling, while a combined or JSON value would need parsing in every consumer.
+- **Why not a role marker property?**
+  It would be a second source of truth beside the metadata, and third-party targets get their roles automatically from their metadata.
+- **Why not a prerequisite property?**
+  USD generates almost no deployable content at build time, and `add_dependencies` already expresses the rest, including on carriers.
+- **Why not generator expressions in exported values?**
+  `EXPORT_PROPERTIES` rejects them, which is why exported file lists use the `PXR_INSTALLED_<X>` siblings.
 
 ### Inventories
 
@@ -389,12 +383,12 @@ Third-party targets join the inventories only through an explicit `pxr_register_
 It keeps its existing linking meaning in imported mode: `usd_m` or all libraries, plus raw system libraries for static Windows builds.
 The `_TARGETS` suffix marks lists that contain only targets, never raw library names.
 
-Why not extend `PXR_LIBRARIES`?
-It is a link list that may contain raw system library names, and changing its contents would break existing consumers.
-Why not `PXR_BINARIES`?
-It would mean tools only, which the name does not convey; `PXR_INSTALLABLE_TARGETS` allows "install everything" without deduplicating overlaps and stays forward-compatible with new roles.
-Why global properties rather than variables?
-A global property is visible from any directory, including the parent of a subproject, and reading it at the selection site avoids stale variable snapshots.
+- **Why not extend `PXR_LIBRARIES`?**
+  It is a link list that may contain raw system library names, and changing its contents would break existing consumers.
+- **Why not `PXR_BINARIES`?**
+  It would mean tools only, which the name does not convey; `PXR_INSTALLABLE_TARGETS` allows "install everything" without deduplicating overlaps and stays forward-compatible with new roles.
+- **Why global properties rather than variables?**
+  A global property is visible from any directory, including the parent of a subproject, and reading it at the selection site avoids stale variable snapshots.
 
 ### Consumer Install Utilities
 
@@ -464,6 +458,8 @@ Both arguments describe the deployment; they neither select, build nor install t
 The consumer installs that target through its own selection, which may be an explicitly selected member whose physical binary is the same target.
 
 The functions write a discovery index: a deployment-owned, relocatable top-level `plugInfo.json` at a location that USD's plugin registry searches relative to the runtime binary's directory.
+Each install-helper call that selects registrations contributes to that index; consumers do not call a separate finalization function.
+Contributions to the same index are combined across calls, and the index is written as part of the install pass, not once per plugin during configuration.
 Its relative `Includes` point at the descriptors actually installed, including those under overridden resource roots.
 It does not assume one wildcard bundle layout like USD's own `lib/usd/plugInfo.json`, and it never overwrites an unrelated index.
 When the same deployment also installs the runtime target, the declared runtime placement is checked against that target's binary destination.
@@ -482,7 +478,7 @@ A `BUILTIN` entry keeps it empty, even when the code is in the monolithic aggreg
 [Registration rewriting](reference.md#registration-rewriting) lists each case.
 Shared binaries, several entries per descriptor or per binary, and resource-only registrations are all supported.
 Undeclared or conflicting ownership in a selected descriptor is an error.
-Templates such as `usd`'s `codegenTemplates/plugInfo.json` and ordinary resources are copied unchanged.
+Resources not declared as registrations are copied unchanged.
 
 Python packages nest, so deploying `pxr/Usd` also needs its parent package `pxr`.
 Every parent package is advertised through the same package-owner contract as any other package, with `PXR_PYTHON_PACKAGE` and `PXR_PYTHON_FILES`.
@@ -523,20 +519,20 @@ The functions do not repair the RPATHs or install names of arbitrary imported bi
 They do not scan for non-USD runtime dependencies, stage files into the build tree or generate Python bytecode.
 There is no general guarantee for shared plugins loaded by a static-USD host, and no guarantee that static code is retained; [Build Modes](#build-modes) covers both.
 
-Why no install-all mode, and no install rules when the package loads?
-Loading a package must stay free of side effects in every consumption mode, and a consumer deploys only what it selects.
-An inventory query keeps bulk selection to one explicit line.
-Why separate category functions rather than a Python forwarding option on plugin installation?
-Plugin and Python content go to independent roots with different required arguments, and a forwarding option would let one call quietly install the other category.
-Why separate calls rather than a nested per-target override map?
-Separate calls reuse one argument vocabulary and ordinary target lists, while a nested map would need its own syntax and parsing.
-Why a generated relocatable index rather than a wildcard layout or `PXR_PLUGINPATH_NAME`?
-A wildcard `Includes` finds bundles only in one fixed layout, and an environment variable must be set at every launch.
-A generated index with relative `Includes` covers any chosen layout and moves with the deployment.
-Why copy `pxr/__init__.py` unchanged rather than regenerate it for the selected subset?
-The initializer belongs to its producer, and regenerating it would give the same package different contents in different deployments.
-Why deployed descriptor copies rather than modifying producer descriptors?
-Producer descriptors are shared by the build tree, the installed USD and every deployment, so each deployment writes its own copies and leaves the originals intact.
+- **Why no install-all mode, and no install rules when the package loads?**
+  Loading a package must stay free of side effects in every consumption mode, and a consumer deploys only what it selects.
+  An inventory query keeps bulk selection to one explicit line.
+- **Why separate category functions rather than a Python forwarding option on plugin installation?**
+  Plugin and Python content go to independent roots with different required arguments, and a forwarding option would let one call quietly install the other category.
+- **Why separate calls rather than a nested per-target override map?**
+  Separate calls reuse one argument vocabulary and ordinary target lists, while a nested map would need its own syntax and parsing.
+- **Why a generated relocatable index rather than a wildcard layout or `PXR_PLUGINPATH_NAME`?**
+  A wildcard `Includes` finds bundles only in one fixed layout, and an environment variable must be set at every launch.
+  A generated index with relative `Includes` covers any chosen layout and moves with the deployment.
+- **Why copy `pxr/__init__.py` unchanged rather than regenerate it for the selected subset?**
+  The initializer belongs to its producer, and regenerating it would give the same package different contents in different deployments.
+- **Why deployed descriptor copies rather than modifying producer descriptors?**
+  Producer descriptors are shared by the build tree, the installed USD and every deployment, so each deployment writes its own copies and leaves the originals intact.
 
 ### Third-Party Plugins
 
@@ -557,7 +553,7 @@ A binary-less plugin or Python package uses an exported metadata-only `INTERFACE
 Generators of deployable content are attached to the deployable target with `add_dependencies`.
 The export lists in `EXPORT_PROPERTIES` the properties that are exported as-is: `PXR_INSTALLED_RESOURCE_FILES`, `PXR_INSTALLED_PYTHON_FILES`, `PXR_PYTHON_PACKAGE`, `PXR_PYTHON_EXTENSION`, `PXR_PLUGIN_REGISTRATIONS`, `PXR_PLUGIN_LOAD_MODE` and `PXR_DEPLOYMENT_BINARY`.
 The in-tree `PXR_RESOURCE_FILES` and `PXR_PYTHON_FILES` are not exported, because the package-load resolution below derives them from their `PXR_INSTALLED_<X>` siblings.
-Exported values carry no generator expressions and no `no_subst` markers.
+Exported values carry no generator expressions.
 
 USD also offers an optional helper, `pxr_set_deployment_metadata`.
 It sets the same properties on an existing target and validates them against the [metadata validation rules](reference.md#metadata-validation-rules).
@@ -566,11 +562,11 @@ It creates no install rules, exports no targets and enrolls nothing in the inven
 Producers remain responsible for their own installation, for complete installed content and for their CMake target exports.
 Installed content never depends on the producer's source or build tree.
 
-Why not the contract alone?
-The properties have several interacting rules, and a thin helper that sets and checks them reduces producer errors.
-Why not a mandatory helper, or a public `pxr_plugin`?
-Third-party projects build plugins in many ways today: they copy USD's macros, re-implement them or hand-roll their own install rules.
-A required helper that builds or installs targets would constrain those existing build systems, while metadata on existing targets fits all of them.
+- **Why not the contract alone?**
+  The properties have several interacting rules, and a thin helper that sets and checks them reduces producer errors.
+- **Why not a mandatory helper, or a public `pxr_plugin`?**
+  Third-party projects build plugins in many ways today: they copy USD's macros, re-implement them or hand-roll their own install rules.
+  A required helper that builds or installs targets would constrain those existing build systems, while metadata on existing targets fits all of them.
 
 An imported package must turn its exported metadata into the values consumers read.
 After loading its exported targets, the package config calls `pxr_resolve_installed_metadata`.
@@ -591,12 +587,12 @@ Producers keep this export bookkeeping in their own package-generation support, 
 A contract-only producer may supply equivalent package-load setup instead of calling the resolver.
 Either way, consumers see resolved `PXR_<X>` values and exported target names.
 
-Why not require identical build and import names?
-Namespaces and `EXPORT_NAME` are valid and common in exports, and forbidding them would exclude many existing packages.
-Why not leave reference resolution to consumers, or to a later revision?
-Every consumer would have to know each producer's export naming, and an unresolved reference makes the metadata unusable after import.
-Why not guess namespaces or load dependency packages implicitly?
-A guess can pick the wrong target silently, and implicit package loading hides dependencies that the package config should declare.
+- **Why not require identical build and import names?**
+  Namespaces and `EXPORT_NAME` are valid and common in exports, and forbidding them would exclude many existing packages.
+- **Why not leave reference resolution to consumers, or to a later revision?**
+  Every consumer would have to know each producer's export naming, and an unresolved reference makes the metadata unusable after import.
+- **Why not guess namespaces or load dependency packages implicitly?**
+  A guess can pick the wrong target silently, and implicit package loading hides dependencies that the package config should declare.
 
 A third-party package also publishes package-scoped role lists of its own exported targets, with resolved references.
 These lists are registration inputs.
@@ -619,12 +615,12 @@ Registration is independent of authoring and package-load resolution.
 It does not build, install or generate install rules, it enrolls no unrelated targets, and it does not expand runtime plugin dependencies.
 Consumers then query the global inventories at the selection site and pass their selections to the functions in [Consumer Install Utilities](#consumer-install-utilities).
 
-Why not enroll targets as a side effect of authoring?
-Authoring happens wherever the producer defines its targets, and inventory changes there would surprise consumers that never asked for those targets.
-Why not let only consumers enroll targets?
-A third-party subproject knows its own deployable targets best, and consumer-only enrollment would prevent it from registering them.
-Why not enroll on package load?
-A consumer may load a package only to link a library, and every loaded package would then grow the inventories that bulk selection reads.
+- **Why not enroll targets as a side effect of authoring?**
+  Authoring happens wherever the producer defines its targets, and inventory changes there would surprise consumers that never asked for those targets.
+- **Why not let only consumers enroll targets?**
+  A third-party subproject knows its own deployable targets best, and consumer-only enrollment would prevent it from registering them.
+- **Why not enroll on package load?**
+  A consumer may load a package only to link a library, and every loaded package would then grow the inventories that bulk selection reads.
 
 Registration makes a plugin available for selection; it is not registration with USD's runtime plugin registry.
 The producer declares its actual registration entries with `PXR_PLUGIN_REGISTRATIONS`.
@@ -717,14 +713,14 @@ Python package and extension relationships are kept for the outputs the producer
 A shared aggregate does not imply ownership of any Python package, and packages and extensions that static builds skip are not synthesized.
 The presence of a binary does not mean that sibling content is deployed, or that every subset a consumer selects satisfies all runtime dependencies.
 
-Why not let the aggregate list its members?
-A reverse list would be a second source of truth beside the members' own metadata, and the direct reference from each member is enough to find the binary.
-Why not rewrite `LibraryPath` of core members to the shared aggregate?
-The aggregate is already loaded when its code runs, and USD's build already treats monolithic core members as not separately loadable, so `BUILTIN` keeps that meaning.
-Why not deploy static archives, for example with an `ARCHIVE_DESTINATION` argument?
-It was considered and dropped, because archive deployment would be a new feature rather than metadata for existing behavior, and USD's own install already handles archives.
-Why not assume discovery is always relative to the executable?
-A static USD can be embedded in a shared library, and Plug then anchors its search on that library, so the consumer must name the actual host.
+- **Why not let the aggregate list its members?**
+  A reverse list would be a second source of truth beside the members' own metadata, and the direct reference from each member is enough to find the binary.
+- **Why not rewrite `LibraryPath` of core members to the shared aggregate?**
+  The aggregate is already loaded when its code runs, and USD's build already treats monolithic core members as not separately loadable, so `BUILTIN` keeps that meaning.
+- **Why not deploy static archives, for example with an `ARCHIVE_DESTINATION` argument?**
+  It was considered and dropped, because archive deployment would be a new feature rather than metadata for existing behavior, and USD's own install already handles archives.
+- **Why not assume discovery is always relative to the executable?**
+  A static USD can be embedded in a shared library, and Plug then anchors its search on that library, so the consumer must name the actual host.
 
 ### USD's Own Installs
 
@@ -734,10 +730,10 @@ A CI check in USD verifies that the metadata reproduces the existing install tre
 Switching USD to install itself through its own metadata is not part of this proposal's acceptance; Pixar may schedule it later as cleanup.
 [Rollout Plan](#rollout-plan) lists the core delivery steps.
 
-Why not switch USD's install rules to the metadata now?
-It would change a working install for every existing user at the same time as the contract is introduced, while the check already gives the same confidence that the metadata is complete.
-Why not add the metadata without a check?
-Nothing would then catch metadata that falls behind the install rules, and consumers would deploy an incomplete tree without any warning.
+- **Why not switch USD's install rules to the metadata now?**
+  It would change a working install for every existing user at the same time as the contract is introduced, while the check already gives the same confidence that the metadata is complete.
+- **Why not add the metadata without a check?**
+  Nothing would then catch metadata that falls behind the install rules, and consumers would deploy an incomplete tree without any warning.
 
 ## Examples
 
@@ -962,10 +958,10 @@ Neither metadata resolution, `pxr_register_targets` nor aggregate membership thr
 `PluginDependencies` in `plugInfo.json` stays the separate runtime mechanism.
 The tooling neither parses it nor checks the required-plugin property against it, so producers that use both keep the two lists in sync.
 
-Why not walk link edges to find required plugins?
-Link edges miss dependencies that exist only at run time, and `MODULE` plugins are never linked, so the link graph cannot see them.
-Why not parse `PluginDependencies` from `plugInfo.json`?
-It is runtime data that fails hard at load, it cannot name typeless plugins such as validators, and it names USD types, so the tooling would need a mapping from USD type names to target names.
+- **Why not walk link edges to find required plugins?**
+  Link edges miss dependencies that exist only at run time, and `MODULE` plugins are never linked, so the link graph cannot see them.
+- **Why not parse `PluginDependencies` from `plugInfo.json`?**
+  It is runtime data that fails hard at load, it cannot name typeless plugins such as validators, and it names USD types, so the tooling would need a mapping from USD type names to target names.
 
 ## Future Work
 

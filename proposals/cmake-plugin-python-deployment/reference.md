@@ -63,7 +63,7 @@ The in-tree file lists themselves are not exported: the producer exports their i
 | `PXR_PLUGIN_LOAD_MODE` | Registration owner; required | `LOADABLE`, `BUILTIN` or `RESOURCE_ONLY` | As-is | How the plugin's code is loaded |
 | `PXR_DEPLOYMENT_BINARY` | Logical owner; optional | One target name | As-is; resolved to the exported name | Physical binary holding the owner's code |
 
-Exported file lists contain no `no_subst` markers and no generator expressions.
+Exported file lists contain no generator expressions.
 
 ## Plugin Load Modes
 
@@ -159,6 +159,7 @@ Deployed descriptor copies treat each selected registration entry according to i
 Templates and ordinary resources are copied unchanged.
 Producer descriptors are never modified.
 The discovery index is deployment-owned, lists the installed descriptors with relative `Includes`, and sits at a location USD's plugin registry searches relative to `USD_RUNTIME_DESTINATION`.
+Install-helper calls contribute to the index across calls, and the combined index is written during installation without a separate consumer finalization call.
 
 ## Python Parent Packages
 
@@ -201,7 +202,7 @@ A producer outside the USD source tree meets these obligations so that its targe
 |---|---|---|
 | Set the `PXR_*` [deployment properties](#deployment-properties) on the deployable target | Every deployable target | By the producer's own CMake code or with `pxr_set_deployment_metadata` |
 | Set `PXR_INSTALLED_RESOURCE_FILES` and `PXR_INSTALLED_PYTHON_FILES` with prefix-relative sources | Targets with resource or Python files | Sources relative to the producer's installed prefix; destinations as in `PXR_<X>` |
-| Export the as-is properties | Every exported deployable target | Through `EXPORT_PROPERTIES`: `PXR_INSTALLED_RESOURCE_FILES`, `PXR_INSTALLED_PYTHON_FILES`, `PXR_PYTHON_PACKAGE`, `PXR_PYTHON_EXTENSION`, `PXR_PLUGIN_REGISTRATIONS`, `PXR_PLUGIN_LOAD_MODE`, `PXR_DEPLOYMENT_BINARY`; not the in-tree `PXR_RESOURCE_FILES` or `PXR_PYTHON_FILES`; no generator expressions, no `no_subst` markers |
+| Export the as-is properties | Every exported deployable target | Through `EXPORT_PROPERTIES`: `PXR_INSTALLED_RESOURCE_FILES`, `PXR_INSTALLED_PYTHON_FILES`, `PXR_PYTHON_PACKAGE`, `PXR_PYTHON_EXTENSION`, `PXR_PLUGIN_REGISTRATIONS`, `PXR_PLUGIN_LOAD_MODE`, `PXR_DEPLOYMENT_BINARY`; not the in-tree `PXR_RESOURCE_FILES` or `PXR_PYTHON_FILES`; no generator expressions |
 | Use an exported `INTERFACE` carrier | Binary-less plugins and Python packages | Metadata-only; not meant for linking |
 | Declare `PXR_PLUGIN_REGISTRATIONS` and `PXR_PLUGIN_LOAD_MODE` | Registration owners | Mixed load modes need separate logical owners; see [Plugin Load Modes](#plugin-load-modes) |
 | Name the physical binary with `PXR_DEPLOYMENT_BINARY` | Logical owners whose code is in another binary | Optional otherwise |
