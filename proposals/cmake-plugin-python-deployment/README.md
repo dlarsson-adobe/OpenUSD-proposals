@@ -29,13 +29,13 @@ Authors: David Larsson (Adobe)
 ## Introduction
 
 Applications built on USD need more than the libraries they link against.
-At run time USD also loads plugin binaries such as `hdStorm` and `usdAbc`, reads their `plugInfo.json` registrations and resources, and imports compiled and pure-Python modules.
+At run time USD also loads plugin binaries such as `hdStorm` and `usdAbc`, reads their `plugInfo.json` registrations and resources, and imports compiled Python extension modules and pure-Python packages.
 USD's CMake build knows about every one of these files, but only as install rules for its own install tree, so a project that consumes USD cannot ask which files it needs to ship.
 In practice, teams copy USD's install tree wholesale, point `PXR_PLUGINPATH_NAME` at it, or maintain a hand-written file list that drifts with every release.
 
-We propose that USD describe these runtime files to CMake as metadata on its exported targets, and ship a small set of CMake functions that install selected plugins and Python packages into a layout the consumer chooses.
+We propose that USD describe these runtime files to CMake as metadata on its exported targets, and ship a small set of CMake functions that install selected libraries, plugins, tools and Python packages into a layout the consumer chooses.
 The same calls work whether a project imports USD with `find_package(pxr)`, adds it as a subproject, or builds it on its own, and plugins built outside USD's source tree can follow the same convention.
-The core of the proposal adds this metadata alongside USD's existing install rules and leaves USD's own install unchanged; plugin dependency closure follows in a later phase.
+The core of the proposal adds exports, this metadata and target inventories alongside USD's existing install rules, which stay unchanged; plugin dependency closure follows in a later phase.
 
 ## Problem Statement
 
@@ -50,7 +50,7 @@ The other two modes each fail for a different reason, and the workarounds teams 
 
 ### Imported consumers cannot see plugins or Python modules
 
-`pxrTargets.cmake` exports USD's libraries but deliberately leaves out plugins such as `hdStorm` and `usdAbc`, the compiled Python modules, and the C++ tools.
+`pxrTargets.cmake` exports USD's libraries but deliberately leaves out plugins such as `hdStorm` and `usdAbc`, and it installs the compiled Python extension modules and the C++ tools without exporting them.
 Resource-only plugins and pure-Python packages have no target at all, and no exported target records which resources, `plugInfo.json` files or Python files it needs.
 A consumer that wants to ship USD with its application therefore has nothing to ask CMake about.
 
