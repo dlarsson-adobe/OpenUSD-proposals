@@ -80,11 +80,100 @@ An application that combines several such plugins must then learn and handle eac
 
 ## Glossary
 
-<!-- D07: replace this line with the Glossary section -->
+This glossary defines terms as this proposal uses them, and each entry links the section that explains it.
+
+- **Consumer utilities:** the CMake functions that USD ships as `pxrInstall.cmake` in its config package, `pxr_install_targets`, `pxr_install_plugins` and `pxr_install_python_packages`, which deploy explicitly selected targets into a layout the consumer chooses.
+  Loading the module creates no install rules; see [Consumer Install Utilities](#consumer-install-utilities) and [Install functions](reference.md#install-functions).
+- **Consumption mode:** one of the three ways a project obtains USD's CMake targets: as the top-level build, where USD is the project being built and installed, as a subproject added with `add_subdirectory` or `FetchContent`, or imported with `find_package(pxr)` from an installed USD.
+  See [Problem Statement](#problem-statement).
+- **Deployment inventory:** one of six global properties that list installable targets: five list targets by role, such as `PXR_PLUGIN_TARGETS`, while `PXR_INSTALLABLE_TARGETS` holds their union plus otherwise unclassified content carriers.
+  Membership neither builds nor installs anything; see [Inventories](#inventories) and [the inventories reference](reference.md#inventories).
+- **Deployment metadata:** the small family of `PXR_` target properties that describe what a target needs alongside its binary: resource and Python files, Python package identity and extension, plugin registrations and load mode, and the deployment binary.
+  See [Deployment Metadata](#deployment-metadata) and [Deployment properties](reference.md#deployment-properties).
+- **Deployment root:** the directory, relative to the install prefix, that the `DESTINATION` argument of a consumer utility names; every other destination is relative to it, and every output stays beneath it.
+  See [Consumer Install Utilities](#consumer-install-utilities) and [Install arguments](reference.md#install-arguments).
+- **Discovery anchor:** the binary that contains Plug's discovery code, on whose directory the plugin registry anchors its registration search, such as the shared `plug` library, the shared aggregate `usd_m`, or the host that embeds a static USD.
+  A static archive is never an anchor, and a consumer names the anchor with `USD_RUNTIME_TARGET` and its deployed directory with `USD_RUNTIME_DESTINATION`; see [Build Modes](#build-modes) and [Discovery anchors](reference.md#discovery-anchors).
+- **Discovery index:** a deployment-owned, relocatable top-level `plugInfo.json` that the consumer utilities write at a location the plugin registry searches relative to the runtime binary's directory, with relative `Includes` that point at the descriptors actually installed.
+  See [Consumer Install Utilities](#consumer-install-utilities).
+- **Installable target:** the target for an item a consumer may deploy on its own, addressable by name in every consumption mode; the kinds are libraries, plugins, compiled Python extension modules, tools, pure-Python packages and resource-only plugins.
+  See [Installable Targets and Exports](#installable-targets-and-exports) and [Installable target kinds](reference.md#installable-target-kinds).
+- **Logical owner:** the target that owns a piece of deployable content, such as resources, registrations or a Python package.
+  It is usually also the physical binary, but in monolithic builds the code of core members is linked into the aggregate `usd_m`; see [Installable Targets and Exports](#installable-targets-and-exports).
+- **Metadata-only carrier:** an exported `INTERFACE` library that identifies deployable content but contains no code, used for resource-only plugins, pure-Python packages and Python tools.
+  A carrier can also describe a built-in member of an aggregate that it names with `PXR_DEPLOYMENT_BINARY`; see [Installable Targets and Exports](#installable-targets-and-exports) and [Build Modes](#build-modes).
+- **Namespace parent package:** a parent Python package whose owner advertises no `__init__.py`, so that it is deployed without an initializer.
+  See [Consumer Install Utilities](#consumer-install-utilities) and [Python parent packages](reference.md#python-parent-packages).
+- **Package owner:** the target that carries the Python metadata for one package, normally the library target or a metadata-only carrier for a pure-Python package.
+  It sets `PXR_PYTHON_PACKAGE` and `PXR_PYTHON_FILES`, and names any compiled extension with `PXR_PYTHON_EXTENSION`; see [Deployment Metadata](#deployment-metadata).
+- **Physical binary:** the binary that holds a logical owner's code, which is the owner's own binary unless `PXR_DEPLOYMENT_BINARY` names another target, such as `usd_m` for a monolithic member, and which a carrier lacks unless it names another target with `PXR_DEPLOYMENT_BINARY`.
+  See [Deployment Metadata](#deployment-metadata), [Build Modes](#build-modes) and [Physical binary resolution](reference.md#physical-binary-resolution).
+- **Plugin:** a library or resource bundle registered through `plugInfo.json`, which in this proposal means a target with a registration in `PXR_PLUGIN_REGISTRATIONS`, since there is no separate role marker.
+  Not every library is a plugin; see [Deployment Metadata](#deployment-metadata).
+- **Plugin dependency closure:** a later-phase opt-in that follows required-plugin references, whereas without it the consumer utilities deploy explicit selections only, apart from Python parent support.
+  See [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure).
+- **Plugin load mode:** the value of the required `PXR_PLUGIN_LOAD_MODE` property, `LOADABLE`, `BUILTIN` or `RESOURCE_ONLY`, which states how a plugin's code reaches the process and so decides what happens to `LibraryPath`.
+  See [Deployment Metadata](#deployment-metadata) and [Plugin load modes](reference.md#plugin-load-modes).
+- **Registration descriptor:** a `plugInfo.json` file that registers plugins and that its owner names in `PXR_PLUGIN_REGISTRATIONS`.
+  Not every file named `plugInfo.json` is one, because `usd`'s `codegenTemplates/plugInfo.json` is a template; see [Deployment Metadata](#deployment-metadata).
+- **Registration entry:** one entry in the `Plugins` list of a registration descriptor.
+  An owner owns every entry of a descriptor, or only the entry it names with the `<descriptor>:<Name>` form; see [Deployment Metadata](#deployment-metadata).
+- **Regular parent package:** a parent Python package whose owner's files include `__init__.py`, which is copied unchanged and has exactly one authoritative provider.
+  See [Consumer Install Utilities](#consumer-install-utilities) and [Python parent packages](reference.md#python-parent-packages).
+- **Third-party plugin:** a plugin built outside USD's source tree, which deploys like a USD plugin when it publishes the same deployment metadata and the consumer registers its targets.
+  See [Third-Party Plugins](#third-party-plugins).
 
 ## Prior Art
 
-<!-- D07: replace this line with the Prior Art section -->
+We surveyed CMake's own facilities, Qt 6, VTK, packages that publish path variables, and the Adobe USD fork work that motivated this proposal.
+Each paragraph ends with where this proposal differs from the precedent.
+
+CMake itself has no general target-level facility that describes deployable data with the per-file destinations USD needs.
+[`target_sources(FILE_SET)`](https://cmake.org/cmake/help/latest/command/target_sources.html#file-sets), added in CMake 3.23, groups files on a target, but its types are fixed and none of them is a data or resource type.
+Each file set also installs to one destination and keeps its layout relative to `BASE_DIRS`, so it cannot carry the per-file destinations that USD's resources and Python files need.
+The built-in [`RESOURCE`](https://cmake.org/cmake/help/latest/prop_tgt/RESOURCE.html) property is flat, has one destination and is designed for bundles, and it is not exported.
+[`EXPORT_PROPERTIES`](https://cmake.org/cmake/help/latest/prop_tgt/EXPORT_PROPERTIES.html) exports custom properties, but it rejects names that start with `INTERFACE_` or `IMPORTED_` and values that contain generator expressions; since CMake 3.19, interface libraries may carry arbitrary properties.
+Binaries are better served.
+[`install(IMPORTED_RUNTIME_ARTIFACTS)`](https://cmake.org/cmake/help/latest/command/install.html), added in CMake 3.21, installs the binaries of imported targets, while [runtime dependency sets](https://cmake.org/cmake/help/latest/command/install.html#runtime-dependency-set) and [`file(GET_RUNTIME_DEPENDENCIES)`](https://cmake.org/cmake/help/latest/command/file.html#get-runtime-dependencies) collect the runtime dependencies of binaries, but all of them cover binaries only.
+We propose to work within these limits.
+Public names use the `PXR_` prefix, exported file lists use separate installed siblings instead of generator expressions (see [Deployment Metadata](#deployment-metadata)), imported binaries are deployed with imported runtime artifact installation, and non-USD runtime dependencies are not scanned.
+USD's minimum CMake version stays 3.27, so the proposal relies on no CMake feature added after it.
+
+Qt 6 is the closest precedent.
+Its internal plugin helper stores per-plugin metadata such as `QT_PLUGIN_TYPE`, `QT_PLUGIN_CLASS_NAME` and `QT_MODULE` in project-prefixed custom properties and lists them in `EXPORT_PROPERTIES` ([QtPluginHelpers.cmake](https://github.com/qt/qtbase/blob/dev/cmake/QtPluginHelpers.cmake)), so the properties read the same in-tree and imported.
+Projects select plugins by name or type with [`qt_import_plugins`](https://doc.qt.io/qt-6/qt-import-plugins.html) and with the plugin include and exclude options that [`qt_deploy_runtime_dependencies`](https://doc.qt.io/qt-6/qt-deploy-runtime-dependencies.html) gained in Qt 6.10.
+[`qt_generate_deploy_script`](https://doc.qt.io/qt-6/qt-generate-deploy-script.html), added in Qt 6.5, writes a deploy script that the project runs at install time.
+We propose the same pattern of prefixed custom properties that are exported and read alike in every consumption mode, but the metadata differs in kind.
+Qt's metadata names a plugin's type and class, while USD's lists the resource and Python files and the registrations a target deploys.
+Qt selects plugins by type, whereas USD consumers pass explicit target lists, usually read from an [inventory](#inventories).
+Qt's deploy helper also resolves runtime dependencies, which this proposal leaves out.
+
+VTK's module system keeps module metadata in `INTERFACE_vtk_module_` target properties ([vtkModule.cmake](https://github.com/Kitware/VTK/blob/master/CMake/vtkModule.cmake)), a prefix that interface libraries required before CMake 3.19.
+Because `EXPORT_PROPERTIES` rejects `INTERFACE_` names, VTK writes its own generated properties file, and its `SPLIT_INSTALL_PROPERTIES` exports a separate install value under the plain property name, which keeps build-tree and installed paths apart without generator expressions.
+The `PXR_INSTALLED_<X>` siblings follow the same idea of a separate installed value.
+The difference is that since CMake 3.19 any target, including an `INTERFACE` carrier, can hold `PXR_` properties that go through `EXPORT_PROPERTIES` directly, so no hand-written export file is needed.
+The installed siblings are then resolved when the package loads, by `pxr_resolve_installed_metadata`, as [Third-Party Plugins](#third-party-plugins) describes.
+
+Some packages instead publish package-level path variables, such as `MATERIALX_STDLIB_DIR` in MaterialX ([MaterialXConfig.cmake.in](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/cmake/modules/MaterialXConfig.cmake.in)) and `OpenImageIO_PLUGIN_SEARCH_PATH` in OpenImageIO ([Config.cmake.in](https://github.com/AcademySoftwareFoundation/OpenImageIO/blob/main/src/cmake/Config.cmake.in)).
+Such variables work only for imported consumption and describe whole directories, so they cannot select individual plugins, which is why this proposal puts metadata on targets instead.
+
+This proposal was motivated by and prototyped in Adobe's internal USD fork and build tooling.
+The fork added per-target properties for resource files, Python files and the Python package, and it exported installed-path siblings for resource and Python files that its package config maps back to absolute paths when the package loads.
+It also exported plugin and tool targets, and consumer-side CMake helpers rewrite the `Root`, `ResourcePath` and `LibraryPath` of a plugin's `plugInfo.json` for the consumer's layout and install Python content.
+The export of C++ tool targets is the first slice proposed upstream, in [PixarAnimationStudios/OpenUSD#4300](https://github.com/PixarAnimationStudios/OpenUSD/pull/4300).
+The fork worked under narrower constraints, with vcpkg packaging, Python always enabled, non-monolithic builds and one set of applications, so we rechecked each rule for generality.
+As a result, the proposal differs from the fork in these ways:
+
+- Names carry the `PXR_` prefix, because unprefixed names sit too close to CMake's built-in `RESOURCE`.
+- Registrations are explicit in `PXR_PLUGIN_REGISTRATIONS` with a required load mode, instead of treating a file named `plugInfo.json` as the registration and rewriting only its first `Plugins` entry.
+- Metadata lists carry no `no_subst` flag.
+- Metadata-only carriers describe content that has no binary.
+- Global inventories advertise the installable targets.
+- A generated relocatable discovery index replaces globbing for a root `plugInfo.json`.
+- An explicit mapping to export names resolves target references after import.
+- Logical owners and `PXR_DEPLOYMENT_BINARY` cover monolithic and static builds.
+
+The Common Package Specification is left to [Future Work](#future-work).
 
 ## Proposal
 
