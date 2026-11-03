@@ -433,7 +433,104 @@ Producer descriptors are shared by the build tree, the installed USD and every d
 
 ### Third-Party Plugins
 
-<!-- D03: replace this line with the section -->
+A third-party plugin deploys like a USD plugin when it publishes the same deployment metadata.
+The convention has three independent parts: authoring the metadata, resolving it when the package loads, and registering the targets in the inventories.
+Installed discovery then works as for USD's own plugins.
+The three functions involved are shipped with USD's config package.
+The [reference](reference.md) lists the [producer obligations](reference.md#third-party-producer-obligations) and the [third-party functions](reference.md#third-party-functions) with their arguments.
+
+The documented `PXR_*` property contract is sufficient on its own.
+A producer that sets the properties with its own CMake code is a first-class participant, and USD requires nothing more.
+The producer publishes the [deployment properties](reference.md#deployment-properties) on each deployable target.
+Resources and Python files go in `PXR_RESOURCE_FILES` and `PXR_PYTHON_FILES`, with the `PXR_INSTALLED_RESOURCE_FILES` and `PXR_INSTALLED_PYTHON_FILES` siblings for export, whose sources are relative to the producer's installed prefix.
+Package and extension ownership go in `PXR_PYTHON_PACKAGE` and `PXR_PYTHON_EXTENSION`.
+Registration entries go in `PXR_PLUGIN_REGISTRATIONS`, and each registration owner declares the required `PXR_PLUGIN_LOAD_MODE`.
+A logical owner whose code lives in another binary names it with `PXR_DEPLOYMENT_BINARY`.
+A binary-less plugin or Python package uses an exported metadata-only `INTERFACE` carrier, as proposed for USD's own targets.
+Generators of deployable content are attached to the deployable target with `add_dependencies`.
+The export lists in `EXPORT_PROPERTIES` the properties that are exported as-is: `PXR_INSTALLED_RESOURCE_FILES`, `PXR_INSTALLED_PYTHON_FILES`, `PXR_PYTHON_PACKAGE`, `PXR_PYTHON_EXTENSION`, `PXR_PLUGIN_REGISTRATIONS`, `PXR_PLUGIN_LOAD_MODE` and `PXR_DEPLOYMENT_BINARY`.
+The in-tree `PXR_RESOURCE_FILES` and `PXR_PYTHON_FILES` are not exported, because the package-load resolution below derives them from their `PXR_INSTALLED_<X>` siblings.
+Exported values carry no generator expressions and no `no_subst` markers.
+
+USD also offers an optional helper, `pxr_set_deployment_metadata`.
+It sets the same properties on an existing target and validates them against the [metadata validation rules](reference.md#metadata-validation-rules).
+It does not create libraries or replace the producer's build system.
+It creates no install rules, exports no targets and enrolls nothing in the inventories.
+Producers remain responsible for their own installation, for complete installed content and for their CMake target exports.
+Installed content never depends on the producer's source or build tree.
+
+Why not the contract alone?
+The properties have several interacting rules, and a thin helper that sets and checks them reduces producer errors.
+Why not a mandatory helper, or a public `pxr_plugin`?
+Third-party projects build plugins in many ways today: they copy USD's macros, re-implement them or hand-roll their own install rules.
+A required helper that builds or installs targets would constrain those existing build systems, while metadata on existing targets fits all of them.
+
+An imported package must turn its exported metadata into the values consumers read.
+After loading its exported targets, the package config calls `pxr_resolve_installed_metadata`.
+It passes the package's relocated prefix, derived from the location of the config file, and an explicit mapping from build target names to exported target names.
+The resolver resolves the sources of `PXR_INSTALLED_RESOURCE_FILES` and `PXR_INSTALLED_PYTHON_FILES` against that prefix into `PXR_RESOURCE_FILES` and `PXR_PYTHON_FILES`.
+Bundle-relative and package-relative destinations stay unchanged.
+It also resolves the target references in `PXR_PYTHON_EXTENSION` and `PXR_DEPLOYMENT_BINARY` through the mapping, honoring export namespaces and `EXPORT_NAME`.
+This mapping is needed because CMake does not rewrite target names inside custom exported properties.
+Metadata-only carriers follow the same contract.
+The resolver is idempotent and creates neither install rules nor inventory enrollment.
+Under this proposal, USD's package config does the same for USD's targets after it includes them.
+USD exports its targets without a namespace, so its mapping is the identity.
+Later-phase required-plugin references follow the same resolution; see [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure).
+
+A reference to a target in another package names a target supplied by a normally declared package dependency.
+The resolver never guesses namespaces and never discovers or loads dependency packages itself.
+Producers keep this export bookkeeping in their own package-generation support, not in each consuming application.
+A contract-only producer may supply equivalent package-load setup instead of calling the resolver.
+Either way, consumers see resolved `PXR_<X>` values and exported target names.
+
+Why not require identical build and import names?
+Namespaces and `EXPORT_NAME` are valid and common in exports, and forbidding them would exclude many existing packages.
+Why not leave reference resolution to consumers, or to a later revision?
+Every consumer would have to know each producer's export naming, and an unresolved reference makes the metadata unusable after import.
+Why not guess namespaces or load dependency packages implicitly?
+A guess can pick the wrong target silently, and implicit package loading hides dependencies that the package config should declare.
+
+A third-party package also publishes package-scoped role lists of its own exported targets, with resolved references.
+These lists are registration inputs.
+They are not snapshots of the project-wide union and do not replace the global [inventories](reference.md#inventories).
+To make the targets available for selection, the consumer registers them explicitly:
+
+```cmake
+find_package(acmeUsdPlugins REQUIRED)
+pxr_register_targets(TARGETS acme::usdAcme acme::acmeResources)
+```
+
+`pxr_register_targets` validates the named existing targets and their metadata, resolves aliases, and deduplicates its additions to the project-global `PXR_*_TARGETS` properties.
+Roles come from the metadata and the native target kind, exactly as for USD's own targets, so there is no role marker.
+Otherwise unclassified content carriers join `PXR_INSTALLABLE_TARGETS`.
+A package's metadata is resolved completely before its targets are registered, and unknown targets or invalid metadata are errors.
+Loading a third-party package never enrolls its targets; the consumer opts in.
+A third-party subproject may make the call itself, including under `EXCLUDE_FROM_ALL`.
+USD's own producer list stays distinct from the project-wide union, and `PXR_LIBRARIES` keeps its linking meaning.
+Registration is independent of authoring and package-load resolution.
+It does not build, install or generate install rules, it enrolls no unrelated targets, and it does not expand runtime plugin dependencies.
+Consumers then query the global inventories at the selection site and pass their selections to the functions in [Consumer Install Utilities](#consumer-install-utilities).
+
+Why not enroll targets as a side effect of authoring?
+Authoring happens wherever the producer defines its targets, and inventory changes there would surprise consumers that never asked for those targets.
+Why not let only consumers enroll targets?
+A third-party subproject knows its own deployable targets best, and consumer-only enrollment would prevent it from registering them.
+Why not enroll on package load?
+A consumer may load a package only to link a library, and every loaded package would then grow the inventories that bulk selection reads.
+
+Registration makes a plugin available for selection; it is not registration with USD's runtime plugin registry.
+The producer declares its actual registration entries with `PXR_PLUGIN_REGISTRATIONS`.
+The owner uses its native binary or an explicit `PXR_DEPLOYMENT_BINARY`, and declares its [plugin load mode](reference.md#plugin-load-modes).
+An `INTERFACE` owner can stand for a built-in member of an aggregate, not only for a resource-only plugin.
+Several entries may share one binary, and mixed load modes need separate logical owners.
+From there the consumer install functions treat the plugin exactly like a USD plugin; [Consumer Install Utilities](#consumer-install-utilities) describes how they generate descriptors and discovery indexes for the selected entries.
+Static and monolithic discovery follows [Build Modes](#build-modes).
+This gives installed discovery without `PXR_PLUGINPATH_NAME`, subject to the runtime-placement validation of the consumer install functions.
+It does not promise to repair arbitrary loader or RPATH settings.
+
+Python follows the same explicit package and extension contract as USD's own packages.
+Consumers never infer an extension from its name, a package has one owner, and registering one package does not enroll its siblings.
 
 ### Build Modes
 

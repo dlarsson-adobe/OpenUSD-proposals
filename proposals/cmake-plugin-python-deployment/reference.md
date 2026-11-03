@@ -169,6 +169,81 @@ Every condition below is an error, detected as early as the information allows.
 | Incompatible content or transformations at one output path, including configuration collisions and default bundle-name collisions | Configure time when known, otherwise install time | Error |
 | Missing input file | Install time | Error; the message names the target and the file and the required preparation, such as building the target or adding `add_dependencies` under `EXCLUDE_FROM_ALL` |
 
-<!-- D03: replace this line with the third-party plugin function tables -->
+## Third-Party Producer Obligations
+
+A producer outside the USD source tree meets these obligations so that its targets deploy like USD's own.
+
+| Obligation | Applies to | Notes |
+|---|---|---|
+| Set the `PXR_*` [deployment properties](#deployment-properties) on the deployable target | Every deployable target | By the producer's own CMake code or with `pxr_set_deployment_metadata` |
+| Set `PXR_INSTALLED_RESOURCE_FILES` and `PXR_INSTALLED_PYTHON_FILES` with prefix-relative sources | Targets with resource or Python files | Sources relative to the producer's installed prefix; destinations as in `PXR_<X>` |
+| Export the as-is properties | Every exported deployable target | Through `EXPORT_PROPERTIES`: `PXR_INSTALLED_RESOURCE_FILES`, `PXR_INSTALLED_PYTHON_FILES`, `PXR_PYTHON_PACKAGE`, `PXR_PYTHON_EXTENSION`, `PXR_PLUGIN_REGISTRATIONS`, `PXR_PLUGIN_LOAD_MODE`, `PXR_DEPLOYMENT_BINARY`; not the in-tree `PXR_RESOURCE_FILES` or `PXR_PYTHON_FILES`; no generator expressions, no `no_subst` markers |
+| Use an exported `INTERFACE` carrier | Binary-less plugins and Python packages | Metadata-only; not meant for linking |
+| Declare `PXR_PLUGIN_REGISTRATIONS` and `PXR_PLUGIN_LOAD_MODE` | Registration owners | Mixed load modes need separate logical owners; see [Plugin Load Modes](#plugin-load-modes) |
+| Name the physical binary with `PXR_DEPLOYMENT_BINARY` | Logical owners whose code is in another binary | Optional otherwise |
+| Attach generators of deployable content with `add_dependencies` | Targets with generated content | There is no prerequisite property |
+| Install complete content and export the targets | The producer's package | Installed content never depends on the producer's source or build tree |
+| Supply the build-to-export name mapping and call `pxr_resolve_installed_metadata` in the package config, or provide equivalent setup | The producer's package config | After the exported targets are loaded; consumers see resolved `PXR_<X>` values and exported target names |
+| Publish package-scoped role lists of its own exported targets | The producer's package | Registration inputs with resolved references; not a copy of the global inventories |
+
+## Third-Party Functions
+
+USD ships these functions with its config package.
+They are independent of each other and of the consumer install functions.
+
+| Function | Purpose | Never does |
+|---|---|---|
+| `pxr_set_deployment_metadata(<target> ...)` | Optional; sets and validates the deployment properties on an existing target | Creates no target, build or install rules; exports nothing; enrolls nothing |
+| `pxr_resolve_installed_metadata(TARGETS ... PREFIX <dir> ...)` | Resolves `PXR_INSTALLED_<X>` into `PXR_<X>` and target references into exported names after a package loads its targets | Creates no install rules; enrolls nothing; loads no packages; guesses no namespaces |
+| `pxr_register_targets(TARGETS <target>...)` | Validates existing targets and adds them, deduplicated, to the `PXR_*_TARGETS` inventories by role | No build, no install, no install rules; no unrelated targets; no plugin dependency expansion |
+
+The argument names of `pxr_set_deployment_metadata` and `pxr_resolve_installed_metadata` below are proposed and not yet decided.
+
+### Third-Party `pxr_set_deployment_metadata`
+
+Each keyword sets the property of the same name with the `PXR_` prefix.
+As proposed and not yet decided, omitted keywords leave the property unchanged.
+The function validates the result against the [metadata validation rules](#metadata-validation-rules).
+
+| Argument | Required | Value | Meaning |
+|---|---|---|---|
+| `<target>` | Yes | One existing target | Target that receives the metadata |
+| `RESOURCE_FILES` | No | List of `<source>:<destination>` | Sets `PXR_RESOURCE_FILES` |
+| `INSTALLED_RESOURCE_FILES` | No | List of `<source>:<destination>` | Sets `PXR_INSTALLED_RESOURCE_FILES` |
+| `PYTHON_PACKAGE` | No | Importable package path | Sets `PXR_PYTHON_PACKAGE` |
+| `PYTHON_FILES` | No | List of `<source>:<destination>` | Sets `PXR_PYTHON_FILES` |
+| `INSTALLED_PYTHON_FILES` | No | List of `<source>:<destination>` | Sets `PXR_INSTALLED_PYTHON_FILES` |
+| `PYTHON_EXTENSION` | No | One target name | Sets `PXR_PYTHON_EXTENSION` |
+| `PLUGIN_REGISTRATIONS` | No | List of `<descriptor>` or `<descriptor>:<Name>` | Sets `PXR_PLUGIN_REGISTRATIONS` |
+| `PLUGIN_LOAD_MODE` | No | `LOADABLE`, `BUILTIN` or `RESOURCE_ONLY` | Sets `PXR_PLUGIN_LOAD_MODE`; rule 4 requires it on registration owners |
+| `DEPLOYMENT_BINARY` | No | One target name | Sets `PXR_DEPLOYMENT_BINARY` |
+
+Whether the function also adds the properties to the target's `EXPORT_PROPERTIES`, and whether rules that involve other targets are checked at the call or later, is not yet decided.
+
+### Third-Party `pxr_resolve_installed_metadata`
+
+| Argument | Required | Value | Meaning |
+|---|---|---|---|
+| `TARGETS` | Yes | List of exported target names | Targets of the package whose metadata is resolved, including metadata-only carriers |
+| `PREFIX` | Yes | Absolute directory | Relocated installed prefix of the package, derived from the config file location |
+| `EXPORT_NAMES` | No | List of `<build-name> <exported-name>` pairs | Build-to-export target-name mapping, including namespaces and `EXPORT_NAME` |
+
+The mapping uses pairs rather than a `<build>:<exported>` encoding, because exported names such as `ns::name` contain colons.
+Resolution sets `PXR_RESOURCE_FILES` and `PXR_PYTHON_FILES` from their `PXR_INSTALLED_<X>` siblings with sources resolved against `PREFIX` and destinations unchanged.
+It rewrites `PXR_PYTHON_EXTENSION` and `PXR_DEPLOYMENT_BINARY` through the mapping.
+Calling it again with the same arguments changes nothing.
+
+### Third-Party `pxr_register_targets`
+
+| Argument | Required | Value | Meaning |
+|---|---|---|---|
+| `TARGETS` | Yes | List of existing target names, including aliases | Targets to add to the inventories; aliases resolve to the targets they name |
+
+`pxr_register_targets` applies [metadata validation rules](#metadata-validation-rules) 1-15 and the following rule, numbered to continue that list:
+
+16. A target is registered only after its metadata is resolved: a target with a nonempty `PXR_INSTALLED_RESOURCE_FILES` but no `PXR_RESOURCE_FILES`, or with a nonempty `PXR_INSTALLED_PYTHON_FILES` but no `PXR_PYTHON_FILES`, is unresolved and invalid.
+
+Roles follow [Inventories](#inventories): a target joins every role inventory its metadata and native kind imply, and `PXR_INSTALLABLE_TARGETS`.
+Loading a package never calls it.
 
 <!-- D04: replace this line with the build mode tables -->
