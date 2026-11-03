@@ -86,6 +86,14 @@ Because the build does not describe its runtime files, applications fall back on
 Plugins built outside the USD source tree cannot reuse USD's `pxr_plugin` macros, because USD does not install them.
 Each project invents its own way to install binaries, resources, registrations and Python bindings, so an application that combines several plugins must handle each one differently.
 
+## Glossary
+
+<!-- D07: replace this line with the Glossary section -->
+
+## Prior Art
+
+<!-- D07: replace this line with the Prior Art section -->
+
 ## Proposal
 
 The core of the proposal adds exports, deployment metadata and inventories alongside USD's existing install rules.
@@ -630,3 +638,9 @@ Why not switch USD's install rules to the metadata now?
 It would change a working install for every existing user at the same time as the contract is introduced, while the check already gives the same confidence that the metadata is complete.
 Why not add the metadata without a check?
 Nothing would then catch metadata that falls behind the install rules, and consumers would deploy an incomplete tree without any warning.
+
+## Examples
+
+<!-- D05: replace this line with the Examples section -->
+
+<!-- D06: replace this line with the Alternatives Considered, Risks, Rollout Plan, Later Phase: Plugin Dependency Closure, Future Work and Out of Scope sections -->
