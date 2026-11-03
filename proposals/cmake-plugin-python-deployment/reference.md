@@ -2,7 +2,7 @@
 
 This file is the normative companion of [README.md](README.md), which explains the reasons behind these tables.
 It specifies proposed behavior, not APIs available in USD today; the unresolved third-party helper details are called out in [Third-Party Functions](#third-party-functions).
-Plugin dependency closure and its illustrative option are outside these core tables; see [the later-phase discussion](README.md#later-phase-plugin-dependency-closure).
+Recursive plugin installation and its illustrative option are outside these core tables; see [the later-phase discussion](README.md#later-phase-recursive-plugin-installation).
 
 ## Contents
 

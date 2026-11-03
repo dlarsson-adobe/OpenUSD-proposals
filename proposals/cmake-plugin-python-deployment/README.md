@@ -10,7 +10,7 @@ Authors: David Larsson (Adobe)
 - [Problem Statement](#problem-statement)
   - [Imported Consumers Cannot See Plugins or Python Modules](#imported-consumers-cannot-see-plugins-or-python-modules)
   - [Subproject Consumers Get All of USD or Nothing](#subproject-consumers-get-all-of-usd-or-nothing)
-  - [Every Consumer Relies on Workarounds](#every-consumer-relies-on-workarounds)
+  - [Consumers Rely on Custom Deployment Solutions](#consumers-rely-on-custom-deployment-solutions)
   - [Third-Party Plugins Have No Convention](#third-party-plugins-have-no-convention)
 - [Glossary](#glossary)
 - [Prior Art](#prior-art)
@@ -29,7 +29,7 @@ Authors: David Larsson (Adobe)
 - [Alternatives Considered](#alternatives-considered)
 - [Risks](#risks)
 - [Rollout Plan](#rollout-plan)
-- [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure)
+- [Later Phase: Recursive Plugin Installation](#later-phase-recursive-plugin-installation)
 - [Future Work](#future-work)
 - [Out of Scope](#out-of-scope)
 
@@ -38,11 +38,12 @@ Authors: David Larsson (Adobe)
 Applications built on USD need more than the libraries they link against.
 At run time USD also loads plugin binaries such as `hdStorm` and `usdAbc`, reads their `plugInfo.json` registrations and resources, and imports compiled Python extension modules and pure-Python packages.
 USD's CMake build knows about every one of these files, but only as install rules for its own install tree, so a project that consumes USD cannot ask which files it needs to ship.
-In practice, teams copy USD's install tree wholesale, point `PXR_PLUGINPATH_NAME` at it, or maintain a hand-written file list that drifts with every release.
+In practice, teams copy USD's install tree wholesale, point `PXR_PLUGINPATH_NAME` at it, or build custom deployment solutions that they must maintain as USD changes.
 
 We propose that USD describe these runtime files to CMake as metadata on its exported targets, and ship a small set of CMake functions that install selected libraries, plugins, tools and Python packages into a layout the consumer chooses.
 The same calls work whether a project imports USD with `find_package(pxr)`, adds it as a subproject, or builds it on its own, and plugins built outside USD's source tree can follow the same convention.
-The core of the proposal adds exports, this metadata and target inventories alongside USD's existing install rules, which stay unchanged; plugin dependency closure follows in a later phase.
+The core of the proposal adds exports, this metadata and target inventories alongside USD's existing install rules, which stay unchanged.
+A later phase adds recursive plugin installation: installing the plugins a selected target needs at run time, including the plugins those require in turn.
 
 The sections below explain the proposed behavior; [reference.md](reference.md) collects the properties, function arguments and validation rules.
 All interfaces are proposed, not features available in USD today.
@@ -54,6 +55,7 @@ A project can obtain USD's CMake targets in three ways, which we call consumptio
 
 - **Top-level build:** USD is the project being built and installed.
 - **Subproject:** a parent project adds USD with `add_subdirectory` or `FetchContent`, often with `EXCLUDE_FROM_ALL` so that only the parts it links are built.
+  `EXCLUDE_FROM_ALL` also suppresses USD's install rules when the parent project is installed.
 - **Imported:** a project calls `find_package(pxr)` against an installed USD.
 
 Today only the top-level build deploys USD correctly, and only into USD's own layout.
@@ -69,19 +71,22 @@ A consumer that wants to ship USD with its application therefore has nothing to 
 
 In subproject mode the targets exist, but they carry no deployment metadata either.
 The only way to install USD's runtime files is to run USD's own install rules, which install everything USD configured into USD's layout.
-Combined with `EXCLUDE_FROM_ALL`, those rules still reference targets that were never built, so "build only what I link and install only that" does not work.
+With `EXCLUDE_FROM_ALL`, the parent's install pass ignores USD's install rules entirely, even for USD targets the parent builds as dependencies.
+Running USD's own install separately still uses its complete configured install rules, which can reference targets that were never built.
+Neither route provides "build only what I select and install only that."
 
-### Every consumer relies on workarounds
+### Consumers rely on custom deployment solutions
 
-Because nothing in the build describes USD's runtime files, each application reconstructs that knowledge in its own way.
+Without shared deployment metadata, applications that need their own layout reconstruct that knowledge in custom tooling or file lists.
 The common approaches all trade one problem for another:
 
-- Copying `lib/usd`, `plugin/usd` and `lib/python/pxr` wholesale ships plugins and modules the application never loads.
+- Copying `lib/usd`, `plugin/usd` and `lib/python/pxr` wholesale ships plugins and modules the application never loads, and assumes a directory layout that can change between USD releases.
 - Setting `PXR_PLUGINPATH_NAME` or `PYTHONPATH` at launch lets USD find files outside its expected layout, but ties the application to environment setup that every launcher must repeat.
-- Hand-written lists of plugins, resources and Python files work until USD adds, renames or splits a plugin, and then drift silently.
-- Rewriting `plugInfo.json` `LibraryPath` entries by hand is needed whenever the deployed layout differs from USD's own, because the installed files are configured against USD's install prefix.
+- Custom deployment scripts or file lists need updates when USD adds, renames or splits a plugin, or they can drift silently.
+- Rewriting `plugInfo.json` `LibraryPath` entries is needed when a changed layout moves binaries relative to their registrations.
+  At scale, internal deployment tooling typically handles this rewriting, but each team must implement and maintain it.
 
-None of this knowledge is shared, so every studio and application vendor maintains its own copy.
+The build provides no shared contract for this work, so teams maintain their own deployment knowledge alongside USD.
 
 ### Third-party plugins have no convention
 
@@ -123,8 +128,8 @@ This glossary defines terms as this proposal uses them, and each entry links the
   See [Deployment Metadata](#deployment-metadata), [Build Modes](#build-modes) and [Physical binary resolution](reference.md#physical-binary-resolution).
 - **Plugin:** a library or resource bundle registered through `plugInfo.json`, which in this proposal means a target with a registration in `PXR_PLUGIN_REGISTRATIONS`, since there is no separate role marker.
   Not every library is a plugin; see [Deployment Metadata](#deployment-metadata).
-- **Plugin dependency closure:** a later-phase opt-in that follows required-plugin references, whereas without it the consumer utilities deploy explicit selections only, apart from Python parent support.
-  See [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure).
+- **Plugin dependency closure:** recursive plugin installation, a later-phase opt-in that installs a target's required runtime plugins and the plugins they require in turn.
+  Without it the consumer utilities deploy explicit selections only, apart from Python parent support; see [Later Phase: Recursive Plugin Installation](#later-phase-recursive-plugin-installation).
 - **Plugin load mode:** the value of the required `PXR_PLUGIN_LOAD_MODE` property, `LOADABLE`, `BUILTIN` or `RESOURCE_ONLY`, which states how a plugin's code reaches the process and so decides what happens to `LibraryPath`.
   See [Deployment Metadata](#deployment-metadata) and [Plugin load modes](reference.md#plugin-load-modes).
 - **Registration descriptor:** a `plugInfo.json` file that registers plugins and that its owner names in `PXR_PLUGIN_REGISTRATIONS`.
@@ -312,7 +317,7 @@ The property is exported as-is with no installed sibling.
 Its target name is resolved through the producer's explicit mapping from build targets to exported names, including namespaces and `EXPORT_NAME`.
 Selecting a member brings its physical binary only, not the content of its siblings.
 Selecting the aggregate alone does not select the content of its members.
-This is not dependency closure, which is a later phase.
+This does not recursively install required plugins, which is a later phase.
 
 The package owner carries the Python metadata for one package.
 It is normally the library target, or a metadata-only carrier for a pure-Python package.
@@ -446,7 +451,7 @@ Only runtime artifacts are deployed: no import libraries, headers or CMake packa
 Imported binaries are installed as they are.
 A logical owner with `PXR_DEPLOYMENT_BINARY` deploys the binary that property names, without the content of the binary's other members.
 [Deployment Metadata](#deployment-metadata) and [deployment properties](reference.md#deployment-properties) define the property.
-Copies of a shared aggregate are deduplicated across calls, and aggregate membership never implies plugin closure.
+Copies of a shared aggregate are deduplicated across calls, and aggregate membership never implies recursive installation of required plugins.
 Tools deploy their runtime binary; Python-tool content follows once the property that describes it is defined.
 
 USD's plugin registry has built-in relocatable fallback locations that it searches relative to the binary that contains Plug discovery code.
@@ -510,7 +515,7 @@ Producers attach generated-content prerequisites to their own targets.
 [Install diagnostics](reference.md#install-diagnostics) lists every error condition.
 
 Third-party targets are installed by the same calls once they are registered, as described in [Third-Party Plugins](#third-party-plugins).
-Plugin dependency closure is a later-phase opt-in described in [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure); without it the functions deploy explicit selections only, apart from Python parent support.
+Recursive plugin installation is a later-phase opt-in described in [Later Phase: Recursive Plugin Installation](#later-phase-recursive-plugin-installation); without it the functions deploy explicit selections only, apart from Python parent support.
 
 The functions stop at the binaries the consumer supplies.
 The consumer supplies loader-compatible binaries and layouts, because correct registry paths do not guarantee that the operating system's dynamic loader can load a binary.
@@ -578,7 +583,7 @@ Metadata-only carriers follow the same contract.
 The resolver is idempotent and creates neither install rules nor inventory enrollment.
 Under this proposal, USD's package config does the same for USD's targets after it includes them.
 USD exports its targets without a namespace, so its mapping is the identity.
-Later-phase required-plugin references follow the same resolution; see [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure).
+Later-phase required-plugin references follow the same resolution; see [Later Phase: Recursive Plugin Installation](#later-phase-recursive-plugin-installation).
 
 A reference to a target in another package names a target supplied by a normally declared package dependency.
 The resolver never guesses namespaces and never discovers or loads dependency packages itself.
@@ -664,7 +669,7 @@ Selecting the aggregate alone does not select the content of any member.
 When several selections bring the same shared aggregate, even across separate calls, it is deployed once; [Consumer Install Utilities](#consumer-install-utilities) covers this deduplication.
 Incompatible destinations or transformations for the same binary within one deployment layout remain errors.
 Installing the same target into distinct layouts is allowed.
-The association is neither required-plugin closure nor link-dependency scanning; required-plugin traversal is a separate later phase.
+The association neither recursively installs required plugins nor scans link dependencies; recursive plugin installation is a separate later phase.
 Supplying `USD_RUNTIME_TARGET` selects no binary for installation.
 A member the consumer selects explicitly can still name that same target as its physical binary.
 [Physical binary resolution](reference.md#physical-binary-resolution) lists each case.
@@ -877,7 +882,7 @@ USD's plugin registry therefore finds the plugin from the deployed layout alone,
 
 The "Why" notes in [Installable Targets and Exports](#installable-targets-and-exports), [Deployment Metadata](#deployment-metadata) and [Inventories](#inventories) explain the rejected target, encoding and inventory alternatives.
 [Consumer Install Utilities](#consumer-install-utilities) and [Third-Party Plugins](#third-party-plugins) cover implicit installation, fixed layouts, descriptor mutation, mandatory build helpers and package-load enrollment.
-[Build Modes](#build-modes), [USD's Own Installs](#usds-own-installs) and [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure) cover aggregate membership, archive deployment, replacing existing installs and deriving runtime plugin dependencies.
+[Build Modes](#build-modes), [USD's Own Installs](#usds-own-installs) and [Later Phase: Recursive Plugin Installation](#later-phase-recursive-plugin-installation) cover aggregate membership, archive deployment, replacing existing installs and deriving runtime plugin dependencies.
 
 ## Risks
 
@@ -893,8 +898,8 @@ The main risks follow from adding a public deployment contract to USD's build, a
   Because the utilities ship with USD, they can change together with Plug ([Consumer Install Utilities](#consumer-install-utilities), [Build Modes](#build-modes)).
 - Correct registry paths do not guarantee that the operating system's loader can load a binary, and layout validation does not prove that static registrations survived linking.
   The proposal states this boundary and leaves loader compatibility and linker retention with the consumer ([Build Modes](#build-modes), [Out of Scope](#out-of-scope)).
-- Until closure exists, a subset deployment can miss plugins that are needed at run time.
-  Consumers select those plugins explicitly in the core, and [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure) describes an opt-in that would find them.
+- Until recursive plugin installation exists, a subset deployment can miss plugins that are needed at run time.
+  Consumers select those plugins explicitly in the core, and [Later Phase: Recursive Plugin Installation](#later-phase-recursive-plugin-installation) describes an opt-in that would find them.
 - Third-party adoption is voluntary, so plugins that do not publish the metadata keep today's workarounds.
   The plain property contract and the optional helper keep adoption cheap ([Third-Party Plugins](#third-party-plugins)).
 - Covering modular and monolithic, shared and static builds across Windows, macOS and Linux layouts adds test effort.
@@ -905,7 +910,7 @@ The main risks follow from adding a public deployment contract to USD's build, a
 The core of the proposal is what we ask Pixar to accept.
 It consists of exports for every installable target, the `PXR_*` deployment metadata, the `PXR_*_TARGETS` inventories, the consumer install utilities in `pxrInstall.cmake` with descriptor and index generation and discovery validation, the third-party convention of `pxr_set_deployment_metadata`, `pxr_resolve_installed_metadata` and `pxr_register_targets`, and build-mode coverage.
 These parts belong together, because metadata without utilities gives consumers nothing usable, and the third-party convention is the same contract documented for producers outside USD.
-Plugin dependency closure is a later phase outside core acceptance, described in [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure), and CPS interoperability and build-tree deployment are [Future Work](#future-work), also outside acceptance.
+Recursive plugin installation is a later phase outside core acceptance, described in [Later Phase: Recursive Plugin Installation](#later-phase-recursive-plugin-installation), and CPS interoperability and build-tree deployment are [Future Work](#future-work), also outside acceptance.
 
 We propose to land the core in five ordered steps, each useful and reviewable on its own:
 
@@ -930,29 +935,29 @@ The existing install rules are unchanged, and the metadata is set alongside them
 A CI check that verifies that the metadata reproduces the existing install tree accompanies the metadata added in step 2, and its comparison method and the build modes and platforms it covers are still open.
 Switching USD to install itself through its metadata is outside acceptance, and Pixar may schedule it later as cleanup.
 
-## Later Phase: Plugin Dependency Closure
+## Later Phase: Recursive Plugin Installation
 
-This section sketches plugin dependency closure, a later phase that a later proposal would specify outside the core acceptance.
+This section sketches recursive plugin installation, a later phase that a later proposal would specify outside the core acceptance.
 The interface described here is illustrative, not normative, and the core works without it.
 
 The core deploys explicit selections only.
 A consumer that selects a plugin such as `hdEclair` must also learn that it needs `usdMtlx` at run time, and nothing in the core metadata tells it so.
-Closure would let the consumer ask the install functions to add such required plugins automatically.
+Recursive installation would let the consumer ask the install functions to add such required plugins automatically, along with any further plugins they require.
 
 We propose that any installable target, including libraries and tools as well as plugins, may declare a required-plugin property that lists the target names of the plugins it needs at run time; the later proposal chooses the property's name.
 The property records required edges only, with no optional or recommended kind.
 Its values name targets the way `INTERFACE_LINK_LIBRARIES` does, so they may name USD or third-party targets across package boundaries and in every consumption mode.
 These target references follow the same export and resolution contract as the other target references, so they resolve through `pxr_resolve_installed_metadata` and the producer's export-name mapping, as [Third-Party Plugins](#third-party-plugins) anticipates.
 
-Closure is a consumer opt-in.
-The later proposal would add `WITH_PLUGIN_DEPENDENCIES` to `pxr_install_targets` and `pxr_install_plugins`, while `pxr_install_python_packages` gets no closure option.
+Recursive plugin installation is a consumer opt-in.
+The later proposal would add `WITH_PLUGIN_DEPENDENCIES` to `pxr_install_targets` and `pxr_install_plugins`, while `pxr_install_python_packages` gets no recursive plugin installation option.
 The option is not part of the core install arguments.
 With the option, traversal starts from the supplied targets, follows the required edges safely through cycles, and adds the binary, resource and registration content of every plugin it reaches, but not their Python packages.
 A dependency on a target that does not exist is an error, and so is a dependency on a target that is not a plugin.
 Without the option, consumers select extra plugins explicitly, which is also how the core behaves.
 
 Only that option traverses the edges.
-Neither metadata resolution, `pxr_register_targets` nor aggregate membership through `PXR_DEPLOYMENT_BINARY` follows them, so the associations described in [Build Modes](#build-modes) never imply closure.
+Neither metadata resolution, `pxr_register_targets` nor aggregate membership through `PXR_DEPLOYMENT_BINARY` follows them, so the associations described in [Build Modes](#build-modes) never imply recursive plugin installation.
 
 `PluginDependencies` in `plugInfo.json` stays the separate runtime mechanism.
 The tooling neither parses it nor checks the required-plugin property against it, so producers that use both keep the two lists in sync.
@@ -965,7 +970,7 @@ It is runtime data that fails hard at load, it cannot name typeless plugins such
 ## Future Work
 
 The Common Package Specification (CPS) could let consumers that do not use CMake read the same deployment metadata.
-We do not propose CPS as the primary carrier, because standard CPS has no model for resources, Python ownership, plugin registrations or plugin dependency closure.
+We do not propose CPS as the primary carrier, because standard CPS has no model for resources, Python ownership, plugin registrations or recursive plugin installation.
 Instead, a follow-up proposal could offer an optional projection of the same authoritative metadata into CPS, with standard CPS fields for binaries and compile and link usage, plus a versioned USD-specific extension or a referenced USD deployment manifest for the rest, which non-CMake consumers would implement.
 CMake's own CPS export does not serialize custom `PXR_*` properties, so USD would need a serialization step of its own.
 Generation would be gated on an explicit option and on a producer CMake version that supports CPS export, currently 4.3 or later, without raising USD's 3.27 baseline.
