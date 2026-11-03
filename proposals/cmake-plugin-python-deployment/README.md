@@ -39,40 +39,44 @@ The core of the proposal adds this metadata alongside USD's existing install rul
 
 ## Problem Statement
 
-A project can obtain USD's CMake targets in three ways, called consumption modes:
+A project can obtain USD's CMake targets in three ways, which we call consumption modes:
 
 - **Top-level build:** USD is the project being built and installed.
-- **Subproject:** a parent project adds USD with `add_subdirectory` or `FetchContent`, often with `EXCLUDE_FROM_ALL` so only the parts it links are built.
+- **Subproject:** a parent project adds USD with `add_subdirectory` or `FetchContent`, often with `EXCLUDE_FROM_ALL` so that only the parts it links are built.
 - **Imported:** a project calls `find_package(pxr)` against an installed USD.
 
-Only the top-level build deploys correctly today, and only into USD's own layout.
+Today only the top-level build deploys USD correctly, and only into USD's own layout.
+The other two modes each fail for a different reason, and the workarounds teams use instead have costs of their own.
 
 ### Imported consumers cannot see plugins or Python modules
 
-`pxrTargets.cmake` exports libraries, but deliberately leaves out plugins such as `hdStorm` and `usdAbc`, the compiled Python modules (`_<lib>`), and the C++ tools.
-Resource-only plugins and pure-Python packages have no target at all.
-No exported target records which resources, `plugInfo.json` files or Python files it needs.
-A consumer that wants to ship USD with its application therefore cannot ask CMake which files to install.
+`pxrTargets.cmake` exports USD's libraries but deliberately leaves out plugins such as `hdStorm` and `usdAbc`, the compiled Python modules, and the C++ tools.
+Resource-only plugins and pure-Python packages have no target at all, and no exported target records which resources, `plugInfo.json` files or Python files it needs.
+A consumer that wants to ship USD with its application therefore has nothing to ask CMake about.
 
 ### Subproject consumers get all of USD or nothing
 
 In subproject mode the targets exist, but they carry no deployment metadata either.
-The only way to install USD's runtime files is to run USD's own install rules, which install everything USD configured, into USD's layout.
-With `EXCLUDE_FROM_ALL`, those install rules still reference targets that were never built, so "build only what I link and install only that" does not work.
+The only way to install USD's runtime files is to run USD's own install rules, which install everything USD configured into USD's layout.
+Combined with `EXCLUDE_FROM_ALL`, those rules still reference targets that were never built, so "build only what I link and install only that" does not work.
 
 ### Every consumer relies on workarounds
 
-Because the build does not describe its runtime files, applications fall back on workarounds that are fragile and hard to share:
+Because nothing in the build describes USD's runtime files, each application reconstructs that knowledge in its own way.
+The common approaches all trade one problem for another:
 
-- Copying `lib/usd`, `plugin/usd` and `lib/python/pxr` wholesale, including plugins and modules the application never loads.
-- Setting `PXR_PLUGINPATH_NAME` or `PYTHONPATH` at launch so USD finds files outside its expected layout.
-- Maintaining hand-written lists of plugins, resources and Python files that drift as USD changes.
-- Rewriting `plugInfo.json` `LibraryPath` entries by hand when the deployed layout differs from USD's own, since the installed files are configured against USD's install prefix.
+- Copying `lib/usd`, `plugin/usd` and `lib/python/pxr` wholesale ships plugins and modules the application never loads.
+- Setting `PXR_PLUGINPATH_NAME` or `PYTHONPATH` at launch lets USD find files outside its expected layout, but ties the application to environment setup that every launcher must repeat.
+- Hand-written lists of plugins, resources and Python files work until USD adds, renames or splits a plugin, and then drift silently.
+- Rewriting `plugInfo.json` `LibraryPath` entries by hand is needed whenever the deployed layout differs from USD's own, because the installed files are configured against USD's install prefix.
+
+None of this knowledge is shared, so every studio and application vendor maintains its own copy.
 
 ### Third-party plugins have no convention
 
-Plugins built outside the USD source tree cannot reuse USD's `pxr_plugin` macros, because USD does not install them.
-Each project invents its own way to install binaries, resources, registrations and Python bindings, so an application that combines several plugins must handle each one differently.
+Plugins built outside the USD source tree face the same problem with no shared answer.
+They cannot reuse USD's `pxr_plugin` macros, because USD does not install them, so each project invents its own way to install binaries, resources, registrations and Python bindings.
+An application that combines several such plugins must then learn and handle each convention separately, on top of the work it already does for USD itself.
 
 ## Glossary
 
