@@ -93,7 +93,81 @@ A violation of any rule is an error.
 14. A `PXR_DEPLOYMENT_BINARY` that names a target which itself has `PXR_DEPLOYMENT_BINARY` is an indirect chain and is invalid.
 15. An inventory member that is not a known target is invalid.
 
-<!-- D02: replace this line with the consumer install utility tables -->
+## Install Functions
+
+`pxrInstall.cmake` provides these consumer utilities, and each processes only the targets passed in `TARGETS`.
+
+| Function | Processes | Accepts |
+|---|---|---|
+| `pxr_install_targets` | Every advertised category on the selected targets: runtime binaries, resources, plugin registrations and Python content, including content on otherwise unclassified metadata-only carriers | Every argument in [Install Arguments](#install-arguments) |
+| `pxr_install_plugins` | Selected targets with plugin registrations: their runtime binaries, resources and registrations; other targets contribute nothing | `TARGETS`, `DESTINATION`, `RUNTIME_DESTINATION`, `LIBRARY_DESTINATION`, `RESOURCE_DESTINATION`, `USD_RUNTIME_TARGET`, `USD_RUNTIME_DESTINATION` |
+| `pxr_install_python_packages` | Selected package owners: their Python files and compiled extension modules, plus advertised parent support content; other targets contribute nothing | `TARGETS`, `DESTINATION`, `PYTHON_DESTINATION` |
+
+## Install Arguments
+
+Each argument means the same in every function that accepts it.
+
+| Argument | Meaning | Default | Required when | Accepted by |
+|---|---|---|---|---|
+| `TARGETS` | Targets to process | None | Always | All three functions |
+| `DESTINATION` | Deployment root, relative to the install prefix | `.` | Never | All three functions |
+| `RUNTIME_DESTINATION` | Directory for runtime binaries, including Windows runtime DLLs, relative to the deployment root | `bin` | Never | `pxr_install_targets`, `pxr_install_plugins` |
+| `LIBRARY_DESTINATION` | Directory for shared libraries, relative to the deployment root | The GNUInstallDirs library directory | Never | `pxr_install_targets`, `pxr_install_plugins` |
+| `RESOURCE_DESTINATION` | Exact resource bundle root, relative to the deployment root; no target-name suffix is added | Per target, `usd/<name>` under the library directory, where `<name>` is the target's unqualified name | Never | `pxr_install_targets`, `pxr_install_plugins` |
+| `PYTHON_DESTINATION` | Python root, relative to the deployment root; extension modules go in their package beneath it | None | Python content is selected | `pxr_install_targets`, `pxr_install_python_packages` |
+| `USD_RUNTIME_TARGET` | Target whose binary contains Plug discovery code; never an archive; selects nothing for installation | None | Plugin registrations are selected | `pxr_install_targets`, `pxr_install_plugins` |
+| `USD_RUNTIME_DESTINATION` | Deployed directory of that binary, relative to the deployment root | None | Plugin registrations are selected | `pxr_install_targets`, `pxr_install_plugins` |
+
+An unknown keyword, or an argument the function does not accept, is an error, and every destination, defaults included, must stay beneath the deployment root.
+
+## Registration Rewriting
+
+Deployed descriptor copies treat each selected registration entry according to its [load mode](#plugin-load-modes).
+
+| Aspect | `LOADABLE` | `BUILTIN` | `RESOURCE_ONLY` |
+|---|---|---|---|
+| `LibraryPath` | Rewritten for the selected binary and the chosen layout | Kept empty | Never added |
+| `Root` and `ResourcePath` | Rewritten for the deployed bundle and layout | Rewritten for the deployed bundle and layout | Rewritten for the deployed bundle and layout |
+| Other fields of retained entries | Preserved | Preserved | Preserved |
+| Unselected entries in a selected descriptor | Omitted from the deployed copy | Omitted from the deployed copy | Omitted from the deployed copy |
+| Descriptor-level fields | Preserved | Preserved | Preserved |
+
+Templates and ordinary resources are copied unchanged.
+Producer descriptors are never modified.
+The discovery index is deployment-owned, lists the installed descriptors with relative `Includes`, and sits at a location USD's plugin registry searches relative to `USD_RUNTIME_DESTINATION`.
+
+## Python Parent Packages
+
+A parent package of a selected package is deployed according to its advertised owner.
+
+| Case | Meaning | Rule |
+|---|---|---|
+| Advertised owner with `__init__.py` | Regular parent package | Exactly one authoritative provider; its initializer is copied unchanged |
+| Advertised owner without `__init__.py` | Initializer-free namespace parent package | Nonconflicting contributions may coexist; no initializer is synthesized |
+| Parent with no advertised owner | Missing ownership | Error; never inferred as a namespace |
+| Selected child package | Package owner passed in `TARGETS` | Brings its advertised parent support content but not unselected siblings; shared parent content is deduplicated |
+
+## Install Diagnostics
+
+Every condition below is an error, detected as early as the information allows.
+
+| Condition | Detected at | Result |
+|---|---|---|
+| Unknown keyword | Configure time | Error |
+| Argument the function does not accept | Configure time | Error |
+| Unknown or non-installable target | Configure time | Error |
+| Metadata that breaks a [metadata validation rule](#metadata-validation-rules) | Configure time; install time, before copying, for rules that need descriptor or generated-input contents not yet resolved at configure time | Error |
+| Absolute or escaping destination, including defaults | Configure time | Error |
+| Python content selected without `PYTHON_DESTINATION` | Configure time | Error |
+| Plugin registrations selected without `USD_RUNTIME_TARGET` or `USD_RUNTIME_DESTINATION` | Configure time | Error |
+| Runtime target that is an archive or, as far as CMake can tell, does not contain Plug discovery code | Configure time | Error |
+| Runtime placement inconsistent with the same deployment's install of that target, or discovery that cannot be validated | Configure time | Error; `PXR_PLUGINPATH_NAME` is not assumed |
+| Index location already holding an unrelated index | Configure time when known, otherwise install time | Error |
+| Undeclared or conflicting registration ownership in a selected descriptor | Configure time when the descriptor contents are resolved, otherwise install time, before copying | Error |
+| Parent package without an advertised owner | Configure time | Error |
+| Conflicting regular parent providers or namespace content | Configure time when known, otherwise install time | Error |
+| Incompatible content or transformations at one output path, including configuration collisions and default bundle-name collisions | Configure time when known, otherwise install time | Error |
+| Missing input file | Install time | Error; the message names the target and the file and the required preparation, such as building the target or adding `add_dependencies` under `EXCLUDE_FROM_ALL` |
 
 <!-- D03: replace this line with the third-party plugin function tables -->
 

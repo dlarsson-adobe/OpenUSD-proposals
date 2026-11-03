@@ -291,7 +291,145 @@ A global property is visible from any directory, including the parent of a subpr
 
 ### Consumer Install Utilities
 
-<!-- D02: replace this line with the section -->
+USD ships the consumer utilities as `pxrInstall.cmake` in its config package.
+The module is available automatically in every consumption mode: through `pxrConfig.cmake` when USD is imported, and through USD's own setup in the top-level build and subproject modes.
+Loading it creates no install rules, and the minimum CMake version stays 3.27.
+
+The module provides three functions, and every call names its targets explicitly:
+
+- `pxr_install_targets(TARGETS ...)` processes every category of content the selected targets advertise: runtime binaries, resources, plugin registrations and Python content, including content on otherwise unclassified metadata-only carriers.
+- `pxr_install_plugins(TARGETS ...)` processes plugin content: the binaries, resources and registrations of selected targets that have registrations.
+- `pxr_install_python_packages(TARGETS ...)` processes Python content: the files and compiled extension modules of selected package owners.
+
+[Install functions](reference.md#install-functions) lists what each function processes and which arguments it accepts.
+The two category functions filter a mixed selection by advertised content, so a valid target without matching content contributes nothing.
+Plugin installation does not silently install Python content, and Python installation does not silently install plugins.
+Unknown targets and malformed metadata are errors.
+
+There is no install-all mode.
+Bulk selection reads an inventory at the selection site, after the producer has registered its targets, and passes it to a function:
+
+```cmake
+get_property(plugins GLOBAL PROPERTY PXR_PLUGIN_TARGETS)
+pxr_install_plugins(
+  TARGETS ${plugins}
+  DESTINATION app
+  USD_RUNTIME_TARGET plug
+  USD_RUNTIME_DESTINATION bin)
+```
+
+Here `plug` is the library that contains Plug discovery code in a modular shared build.
+`bin` states that the consumer deploys it to `app/bin`, as on Windows, but this call does not install it.
+The inventories are authoritative global properties, so the functions take target lists and never rely on ordinary-variable snapshots of them.
+
+All destinations share one vocabulary, and each argument means the same in every function that accepts it.
+`DESTINATION` names the deployment root relative to the install prefix, and every other destination is relative to that root.
+`RUNTIME_DESTINATION` places runtime binaries, including Windows runtime DLLs, and `LIBRARY_DESTINATION` places shared libraries.
+`RESOURCE_DESTINATION` places a target's resource bundle, and `PYTHON_DESTINATION` names the Python root.
+[Install arguments](reference.md#install-arguments) gives the defaults and says when each argument is required.
+Bundle-relative resource paths and advertised Python package paths are preserved beneath these roots.
+Compiled Python extension modules go in their package under the Python root, not in the general binary directory.
+
+A consumer that wants different destinations for some targets or categories makes separate calls that select those targets.
+An explicit `RESOURCE_DESTINATION` is the exact bundle root, with no hidden target-name suffix.
+Several targets can share it only when their outputs are compatible.
+Without it, each target gets its own bundle root under the library directory, named after the target's unqualified name, like USD's own bundle roots under `lib/usd`.
+Aliases are resolved before that name is derived, and default names that collide incompatibly require explicit overrides.
+Every output path stays beneath the deployment root.
+An absolute destination, or parent traversal that escapes the root, is an error, and the GNUInstallDirs defaults get the same validation.
+
+For a target built in the same project, the functions use native target installation.
+For an imported target, they use CMake's imported runtime artifact installation, `install(IMPORTED_RUNTIME_ARTIFACTS)`, available since CMake 3.21.
+Only runtime artifacts are deployed: no import libraries, headers or CMake package files.
+Imported binaries are installed as they are.
+A logical owner with `PXR_DEPLOYMENT_BINARY` deploys the binary that property names, without the content of the binary's other members.
+[Deployment Metadata](#deployment-metadata) and [deployment properties](reference.md#deployment-properties) define the property.
+Copies of a shared aggregate are deduplicated across calls, and aggregate membership never implies plugin closure.
+Tools deploy their runtime binary; Python-tool content follows once the property that describes it is defined.
+
+USD's plugin registry has built-in relocatable fallback locations that it searches relative to the binary that contains Plug discovery code.
+`PXR_PLUGINPATH_NAME` and `PXR_INSTALL_LOCATION` also feed discovery, but a relocatable deployment relies on these relative locations.
+The deployed layout therefore matters relative to that binary, not relative to the producer's install prefix.
+`USD_RUNTIME_TARGET` names the target that contains this code, for example `plug` in a modular shared build, the shared monolithic aggregate, or a host executable that embeds static USD.
+A static archive is never a valid anchor.
+`USD_RUNTIME_DESTINATION` names the directory where that binary is deployed, relative to the deployment root.
+Both arguments describe the deployment; they neither select, build nor install the runtime target.
+The consumer installs that target through its own selection, which may be an explicitly selected member whose physical binary is the same target.
+
+The functions write a discovery index: a deployment-owned, relocatable top-level `plugInfo.json` at a location that USD's plugin registry searches relative to the runtime binary's directory.
+Its relative `Includes` point at the descriptors actually installed, including those under overridden resource roots.
+It does not assume one wildcard bundle layout like USD's own `lib/usd/plugInfo.json`, and it never overwrites an unrelated index.
+When the same deployment also installs the runtime target, the declared runtime placement is checked against that target's binary destination.
+When discovery cannot be validated, configuration fails with a clear message instead of silently requiring `PXR_PLUGINPATH_NAME` at run time.
+This check covers the layout only: it does not prove that the host contains or loads the code, or that static registrations survive linking.
+[Build Modes](#build-modes) gives the anchor rules for static and monolithic builds.
+
+Producer descriptors are never modified.
+Instead, the functions aggregate the selected registration entries across calls into deployment-owned descriptor copies.
+A deployed copy omits the entries of unselected plugins and keeps the descriptor-level fields and every other field of the retained entries.
+This refines the metadata model for descriptors that mix owners: the deployed copy does not retain registrations for unselected plugins.
+`Root` and `ResourcePath` are rewritten for the deployed bundle and layout in every load mode.
+`LibraryPath` follows the [load mode](reference.md#plugin-load-modes).
+A `LOADABLE` entry gets the path of its selected binary in the chosen layout.
+A `BUILTIN` entry keeps it empty, even when the code is in the monolithic aggregate, and a `RESOURCE_ONLY` entry never gains one.
+[Registration rewriting](reference.md#registration-rewriting) lists each case.
+Shared binaries, several entries per descriptor or per binary, and resource-only registrations are all supported.
+Undeclared or conflicting ownership in a selected descriptor is an error.
+Templates such as `usd`'s `codegenTemplates/plugInfo.json` and ordinary resources are copied unchanged.
+
+Python packages nest, so deploying `pxr/Usd` also needs its parent package `pxr`.
+Every parent package is advertised through the same package-owner contract as any other package, with `PXR_PYTHON_PACKAGE` and `PXR_PYTHON_FILES`.
+The `pxr` initializer can use a metadata-only owner, and no namespace flag or other new property is needed.
+An owner whose files include `__init__.py` makes a regular parent package.
+An owner without one declares an initializer-free namespace parent package.
+A parent without an advertised owner is an error, never an inferred namespace.
+Selecting a child package brings its advertised parent support content, not unselected sibling packages, and shared parent content is deduplicated.
+Producer initializers are copied unchanged, including USD's generated `pxr/__init__.py`, and empty initializers are never synthesized.
+A regular parent has exactly one authoritative provider, nonconflicting namespace contributions may coexist, and missing or conflicting ownership or content is diagnosed.
+[Python parent packages](reference.md#python-parent-packages) summarizes the cases.
+Only Python outputs that the producer's build enables are advertised and deployed.
+The consumer remains responsible for putting its Python root on the import search path.
+
+Overlapping selections are unioned, and identical output operations are deduplicated across calls.
+Compatible descriptor and index contributions aggregate.
+Incompatible content or transformations at one output path are errors, while deploying the same target into distinct layouts stays allowed.
+Configuration-specific binaries and descriptors need distinct output paths, and configuration-independent content may share a path when it is identical.
+Collisions are diagnosed without requiring a literal `$<CONFIG>` in destinations.
+
+Validation happens as early as the information allows.
+At configure time the functions check metadata, selections, destinations and known collisions.
+This is where the [metadata validation rules](reference.md#metadata-validation-rules) are enforced for the selected targets.
+Rules that need descriptor or generated-input contents not yet resolved at configure time run at install time, before copying.
+At install time they check resolved inputs and configuration-dependent outputs, before copying where possible.
+Installation never builds anything implicitly and never skips a missing advertised file.
+A missing input fails with a message that names the target and the file and explains the required preparation.
+The consumer builds what it selects, which under `EXCLUDE_FROM_ALL` means adding `add_dependencies` on the selected targets.
+Producers attach generated-content prerequisites to their own targets.
+[Install diagnostics](reference.md#install-diagnostics) lists every error condition.
+
+Third-party targets are installed by the same calls once they are registered, as described in [Third-Party Plugins](#third-party-plugins).
+Plugin dependency closure is a later-phase opt-in described in [Later Phase: Plugin Dependency Closure](#later-phase-plugin-dependency-closure); without it the functions deploy explicit selections only, apart from Python parent support.
+
+The functions stop at the binaries the consumer supplies.
+The consumer supplies loader-compatible binaries and layouts, because correct registry paths do not guarantee that the operating system's dynamic loader can load a binary.
+The functions do not repair the RPATHs or install names of arbitrary imported binaries.
+They do not scan for non-USD runtime dependencies, stage files into the build tree or generate Python bytecode.
+There is no general guarantee for shared plugins loaded by a static-USD host, and no guarantee that static code is retained; [Build Modes](#build-modes) covers both.
+
+Why no install-all mode, and no install rules when the package loads?
+Loading a package must stay free of side effects in every consumption mode, and a consumer deploys only what it selects.
+An inventory query keeps bulk selection to one explicit line.
+Why separate category functions rather than a Python forwarding option on plugin installation?
+Plugin and Python content go to independent roots with different required arguments, and a forwarding option would let one call quietly install the other category.
+Why separate calls rather than a nested per-target override map?
+Separate calls reuse one argument vocabulary and ordinary target lists, while a nested map would need its own syntax and parsing.
+Why a generated relocatable index rather than a wildcard layout or `PXR_PLUGINPATH_NAME`?
+A wildcard `Includes` finds bundles only in one fixed layout, and an environment variable must be set at every launch.
+A generated index with relative `Includes` covers any chosen layout and moves with the deployment.
+Why copy `pxr/__init__.py` unchanged rather than regenerate it for the selected subset?
+The initializer belongs to its producer, and regenerating it would give the same package different contents in different deployments.
+Why deployed descriptor copies rather than modifying producer descriptors?
+Producer descriptors are shared by the build tree, the installed USD and every deployment, so each deployment writes its own copies and leaves the originals intact.
 
 ### Third-Party Plugins
 
