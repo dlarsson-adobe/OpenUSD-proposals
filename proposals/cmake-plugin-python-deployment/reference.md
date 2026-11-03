@@ -246,4 +246,42 @@ Calling it again with the same arguments changes nothing.
 Roles follow [Inventories](#inventories): a target joins every role inventory its metadata and native kind imply, and `PXR_INSTALLABLE_TARGETS`.
 Loading a package never calls it.
 
-<!-- D04: replace this line with the build mode tables -->
+## Build Mode Coverage
+
+The metadata contract covers the four build modes USD already supports.
+
+| Build mode | Logical owners | Physical binary | Registration load modes | Python | Deployed by the consumer utilities |
+|---|---|---|---|---|---|
+| Modular shared | Shared libraries, plugins, carriers | Each owner's own shared or module binary | `LOADABLE` with their own binary; `RESOURCE_ONLY` carriers | Advertised packages and extensions | Selected binaries, resources, registrations, Python |
+| Modular static | Static libraries, carriers; ordinary plugins skipped | Own static archive, not deployed | `BUILTIN`, empty `LibraryPath`; `RESOURCE_ONLY` carriers | Skipped, not advertised | Resources and registrations only; discovery anchor validated |
+| Shared monolithic | Core `OBJECT` members, carriers; non-core plugins and extensions as separate targets | Core members: `usd_m` (file `usd_ms`) through `PXR_DEPLOYMENT_BINARY`; non-core: own binary | Core members `BUILTIN`, empty `LibraryPath`; non-core plugins `LOADABLE`; `RESOURCE_ONLY` carriers | Extensions keep their own associations; the aggregate owns no package | Aggregate once (deduplicated), own binaries, resources, registrations, Python |
+| Static monolithic | Core `OBJECT` members, carriers; non-core plugins skipped | Core members: static `usd_m` through `PXR_DEPLOYMENT_BINARY`, not deployed | Core members `BUILTIN`, empty `LibraryPath`; `RESOURCE_ONLY` carriers | Skipped, not advertised | Resources and registrations only; discovery anchor validated |
+
+## Physical Binary Resolution
+
+A logical owner resolves its physical binary as follows.
+
+| Owner situation | `PXR_DEPLOYMENT_BINARY` | Resolved physical binary | Deployed by the consumer utilities |
+|---|---|---|---|
+| Owner with its own shared or module binary | Unset | The owner's own binary | Yes |
+| Monolithic core member | `usd_m` | The aggregate `usd_m` | Yes when shared, once per deployment; no when static |
+| Metadata-only carrier without the property | Unset | None | No binary |
+| `INTERFACE` carrier describing a built-in member | The aggregate, named explicitly | The aggregate | Yes when shared, once per deployment; no when static |
+| Static library or static aggregate | Unset | Its own static archive | No |
+
+Selecting a member selects its physical binary only, not the content of other members.
+Selecting the aggregate alone selects none of its members' content.
+`USD_RUNTIME_TARGET` selects no binary; a selected member can still resolve to the same target.
+
+## Discovery Anchors
+
+`USD_RUNTIME_TARGET` names the binary that contains Plug discovery code, which anchors the registration search.
+
+| Build mode | Binary containing Plug discovery code | Valid `USD_RUNTIME_TARGET` | Notes |
+|---|---|---|---|
+| Modular shared | Shared `plug` library | `plug` | |
+| Modular static | Host executable or shared library that links USD | That host | Static archives are invalid anchors |
+| Shared monolithic | `usd_m` (file `usd_ms`) | `usd_m` | |
+| Static monolithic | Host executable or shared library that links `usd_m` | That host | Static `usd_m` is an invalid anchor |
+
+Validation covers the declared directory and the supported search layout, not whether the host contains or retains the discovery code and registrations.

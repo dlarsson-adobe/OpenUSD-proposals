@@ -534,8 +534,99 @@ Consumers never infer an extension from its name, a package has one owner, and r
 
 ### Build Modes
 
-<!-- D04: replace this line with the Build Modes section -->
+The deployment metadata covers the four build modes USD already supports: modular shared, modular static, shared monolithic and static monolithic.
+It adds no build combination and no new way to load code at run time.
+The rules below are contract rules, not a claim that upstream already exports every target or property they need.
+Monolithic scope is the core under `pxr/` only; plugins outside the core, such as those under `extras/`, stay separate targets.
+[Build mode coverage](reference.md#build-mode-coverage) summarizes each mode.
+
+Each mode builds a different set of binaries today.
+Without shared libraries, USD skips plugins that would be separate binaries, compiled Python modules and Python tools.
+Monolithic builds compile the core libraries and core plugins as per-library `OBJECT` targets and link them into the aggregate `usd_m`, whose file is named `usd_ms` when it is shared.
+USD's build leaves `LibraryPath` empty for static libraries and for monolithic core members, because that code is not separately loadable.
+
+Logical owners exist in every mode.
+Every enabled, independently selectable library, plugin and content owner has an exported logical target, as [Installable Targets and Exports](#installable-targets-and-exports) describes.
+In monolithic builds the existing per-library `OBJECT` targets carry the metadata, and metadata-only carriers stand in where content has no target.
+Resources, registrations and Python ownership stay on the logical owners and are not duplicated on the aggregate.
+The inventories list the enabled logical owners and the applicable physical library targets, as [Inventories](#inventories) describes.
+Plugins and Python outputs that a mode skips are not advertised, and a category the mode does not build is an empty list.
+`PXR_LIBRARIES` keeps its linking meaning, and inventory membership does not make a logical carrier something a consumer can link on its own.
+
+A logical owner reaches its physical binary through `PXR_DEPLOYMENT_BINARY`, defined in [Deployment Metadata](#deployment-metadata).
+In modular builds owners leave it unset and use their own binary, and carriers have none.
+In monolithic builds each core member names the aggregate `usd_m`, and the aggregate lists no members.
+A reference to a target in another package follows the existing declared-dependency rules, and resolving it does not load any package.
+Selecting a member includes its physical binary, but not the resources, registrations or Python packages of other members.
+Selecting the aggregate alone does not select the content of any member.
+When several selections bring the same shared aggregate, even across separate calls, it is deployed once; [Consumer Install Utilities](#consumer-install-utilities) covers this deduplication.
+Incompatible destinations or transformations for the same binary remain errors.
+The association is neither required-plugin closure nor link-dependency scanning; required-plugin traversal is a separate later phase.
+Supplying `USD_RUNTIME_TARGET` selects no binary for installation.
+A member the consumer selects explicitly can still name that same target as its physical binary.
+[Physical binary resolution](reference.md#physical-binary-resolution) lists each case.
+
+Each mode implies a load mode for its registrations; [Plugin load modes](reference.md#plugin-load-modes) defines the values.
+In modular shared builds, plugins and libraries with registrations have their own shared binaries and are `LOADABLE`.
+In modular static builds, the registrations of static libraries are `BUILTIN`, and ordinary plugins are skipped and not advertised.
+In shared monolithic builds, core members are `BUILTIN` with an empty `LibraryPath`, even though `usd_m` is a shared library.
+Separately loadable non-core plugins and Python extensions keep their own binaries and associations, and those plugins are `LOADABLE`.
+In static monolithic builds, core members are `BUILTIN`.
+Owners without code are `RESOURCE_ONLY` in every mode.
+An `INTERFACE` carrier can describe a built-in logical member when it names the aggregate explicitly with `PXR_DEPLOYMENT_BINARY`.
+
+Static and static monolithic builds deploy runtime content only.
+That content is resources, `BUILTIN` registrations with an empty `LibraryPath`, and a validated discovery anchor.
+The consumer utilities do not deploy static archives.
+A static monolithic member still names the static `usd_m` with `PXR_DEPLOYMENT_BINARY`, but that archive is not deployed.
+Archives are link-time and SDK artifacts, and USD's own install handles them as it does today.
+A built-in registration does not turn an archive into a runtime plugin payload.
+
+Plug anchors its registration search on the directory of the binary that contains its discovery code.
+When it cannot determine that binary, it falls back to the executable.
+In modular shared builds that binary is the shared `plug` library, and in shared monolithic builds it is `usd_m`.
+In static builds the discovery code is embedded in whatever executable or shared library links USD, so the anchor is that actual host, not always the executable.
+`USD_RUNTIME_TARGET` names the binary that contains the discovery code, and `USD_RUNTIME_DESTINATION` names the directory where that binary is deployed; [Consumer Install Utilities](#consumer-install-utilities) defines both arguments.
+A static archive is never an anchor.
+The declared directory and the supported search layout are validated, including consistency when the same deployment also installs that binary.
+These arguments alone neither select nor install the host.
+Deployment-owned registration descriptors and relocatable discovery indexes are generated only for supported, validated placements.
+When the placement cannot be established, deployment fails clearly instead of silently requiring `PXR_PLUGINPATH_NAME`.
+[Discovery anchors](reference.md#discovery-anchors) lists the anchor for each mode.
+
+Layout validation has a boundary.
+It does not prove that the host contains or loads the required code, or that a static registration survived linking.
+Consumers provide that integration, for example by whole-archive linking, and they provide binaries their loader can use.
+Arbitrary linker retention, RPATH or install-name repair, and deployment of non-USD dependencies stay outside the guarantee.
+The proposal makes no general portability promise for shared plugins loaded by a host that links USD statically.
+This is not a universal prohibition: a configuration that a producer explicitly advertises and supports can still describe and deploy its artifacts, without the proposal certifying it at run time.
+
+Consumers prepare their selections explicitly.
+They build both the selected logical content and its physical binary, and installation never builds anything or silently skips a missing selected input.
+Members get no build dependency on the aggregate, because it would form a cycle with the aggregate's dependencies on the member objects.
+Prerequisites for generated content stay on the logical owners.
+Python package and extension relationships are kept for the outputs the producer actually enables.
+A shared aggregate does not imply ownership of any Python package, and packages and extensions that static builds skip are not synthesized.
+The presence of a binary does not mean that sibling content is deployed, or that every subset a consumer selects satisfies all runtime dependencies.
+
+Why not let the aggregate list its members?
+A reverse list would be a second source of truth beside the members' own metadata, and the direct reference from each member is enough to find the binary.
+Why not rewrite `LibraryPath` of core members to the shared aggregate?
+The aggregate is already loaded when its code runs, and USD's build already treats monolithic core members as not separately loadable, so `BUILTIN` keeps that meaning.
+Why not deploy static archives, for example with an `ARCHIVE_DESTINATION` argument?
+It was considered and dropped, because archive deployment would be a new feature rather than metadata for existing behavior, and USD's own install already handles archives.
+Why not assume discovery is always relative to the executable?
+A static USD can be embedded in a shared library, and Plug then anchors its search on that library, so the consumer must name the actual host.
 
 ### USD's Own Installs
 
-<!-- D04: replace this line with the USD's Own Installs section -->
+USD keeps its existing install rules, and so its install layout, unchanged.
+Its build sets the deployment metadata alongside those rules, describing the files they install.
+A CI check in USD verifies that the metadata reproduces the existing install tree, so the metadata and the install rules cannot drift apart.
+Switching USD to install itself through its own metadata is not part of this proposal's acceptance; Pixar may schedule it later as cleanup.
+[Rollout Plan](#rollout-plan) lists the core delivery steps.
+
+Why not switch USD's install rules to the metadata now?
+It would change a working install for every existing user at the same time as the contract is introduced, while the check already gives the same confidence that the metadata is complete.
+Why not add the metadata without a check?
+Nothing would then catch metadata that falls behind the install rules, and consumers would deploy an incomplete tree without any warning.
