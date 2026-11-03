@@ -6,7 +6,7 @@ Authors: David Larsson (Adobe)
 
 ## Contents
 
-- [Summary](#summary)
+- [Introduction](#introduction)
 - [Problem Statement](#problem-statement)
 - [Glossary](#glossary)
 - [Prior Art](#prior-art)
@@ -26,28 +26,16 @@ Authors: David Larsson (Adobe)
 - [Future Work](#future-work)
 - [Out of Scope](#out-of-scope)
 
-## Summary
+## Introduction
 
-A USD-based application needs more than the libraries it links.
-At run time it also needs plugin binaries, their `plugInfo.json` registrations and resources, compiled Python modules and pure-Python packages.
-Today USD's CMake build knows these files only as install rules for its own layout, so nothing a consumer can query describes them.
-As a result, deploying USD inside an application means copying USD's install tree wholesale, setting environment variables such as `PXR_PLUGINPATH_NAME`, or maintaining hand-written file lists.
+Applications built on USD need more than the libraries they link against.
+At run time USD also loads plugin binaries such as `hdStorm` and `usdAbc`, reads their `plugInfo.json` registrations and resources, and imports compiled and pure-Python modules.
+USD's CMake build knows about every one of these files, but only as install rules for its own install tree, so a project that consumes USD cannot ask which files it needs to ship.
+In practice, teams copy USD's install tree wholesale, point `PXR_PLUGINPATH_NAME` at it, or maintain a hand-written file list that drifts with every release.
 
-This proposal has three goals:
-
-- **Consistent installation in every consumption mode.**
-  A project installs USD's plugins and Python modules the same way whether it consumes USD as exported targets through `find_package(pxr)`, as a subproject through `add_subdirectory` or `FetchContent`, or as the top-level build.
-- **Out-of-tree plugins installed like in-tree plugins.**
-  Plugins built outside the USD source tree follow the same convention as USD's own, so an application deploys both with the same calls.
-- **Flexible plugin locations.**
-  Developers choose where plugins, resources and Python packages go in their own deployment, instead of reproducing USD's install layout.
-
-To get there, USD would export every installable target and attach deployment metadata to each one: the resources, Python files and Python package it needs, and the plugin registrations it provides.
-The metadata reads the same in every consumption mode.
-USD would also ship CMake utilities in its config package that install selected plugins and Python packages into a layout the consumer chooses, and generate the registration files USD's plugin system needs to find them there.
-
-The core of the proposal adds metadata alongside USD's existing install rules and does not change how USD installs itself.
-Plugin dependency closure is a later phase, and CPS interoperability is future work.
+We propose that USD describe these runtime files to CMake as metadata on its exported targets, and ship a small set of CMake functions that install selected plugins and Python packages into a layout the consumer chooses.
+The same calls work whether a project imports USD with `find_package(pxr)`, adds it as a subproject, or builds it on its own, and plugins built outside USD's source tree can follow the same convention.
+The core of the proposal adds this metadata alongside USD's existing install rules and leaves USD's own install unchanged; plugin dependency closure follows in a later phase.
 
 ## Problem Statement
 
