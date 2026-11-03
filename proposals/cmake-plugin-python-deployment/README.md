@@ -633,6 +633,139 @@ Nothing would then catch metadata that falls behind the install rules, and consu
 
 ## Examples
 
-<!-- D05: replace this line with the Examples section -->
+The three examples below show the proposal working end to end, with concrete names and values chosen only for illustration.
+They assume a modular shared USD build on Windows, and they add no rules of their own: each one links to the section that defines the behavior it relies on.
+
+### Imported Consumer
+
+An application that imports an installed USD finds the `pxr` package, reads the inventories it wants at the selection site and passes them to the [consumer utilities](#consumer-install-utilities):
+
+```cmake
+find_package(pxr REQUIRED)
+add_executable(viewer main.cpp)
+target_link_libraries(viewer PRIVATE usdGeom)
+
+get_property(libraries GLOBAL PROPERTY PXR_LIBRARY_TARGETS)
+get_property(plugins GLOBAL PROPERTY PXR_PLUGIN_TARGETS)
+pxr_install_targets(
+  TARGETS ${libraries} ${plugins}
+  DESTINATION app
+  USD_RUNTIME_TARGET plug
+  USD_RUNTIME_DESTINATION bin
+  PYTHON_DESTINATION python)
+
+get_property(packages GLOBAL PROPERTY PXR_PYTHON_PACKAGE_TARGETS)
+pxr_install_python_packages(TARGETS ${packages} DESTINATION app PYTHON_DESTINATION python)
+```
+
+The first call uses `pxr_install_targets`, because it is the only function that deploys plain library binaries, and the application needs `usdGeom` and the libraries it links against.
+Most USD libraries own registrations, which makes them plugins, so this call selects plugin registrations; that is why it passes both `USD_RUNTIME_TARGET` and `USD_RUNTIME_DESTINATION`.
+Libraries are also package owners when USD is built with Python, so the same call selects Python content, which is why it also passes `PYTHON_DESTINATION`; [Install arguments](reference.md#install-arguments) lists when each argument is required.
+The second call adds the Python package owners that are not libraries, such as pure-Python packages, and the packages that both calls select are deduplicated, as [Inventories](#inventories) describes for overlapping roles.
+
+The functions deploy only what the consumer selects, so selecting the whole library inventory is the simple way to keep the application's link dependencies complete.
+That selection also includes `plug`, which matters because `USD_RUNTIME_TARGET` only describes the deployment and installs nothing.
+`plug` is a runtime DLL on Windows, so it follows the default `RUNTIME_DESTINATION` to `app/bin`, and the functions check that this matches the declared `USD_RUNTIME_DESTINATION` of `bin`.
+
+All selected targets here are imported, so their binaries deploy through `install(IMPORTED_RUNTIME_ARTIFACTS)` and are installed as they are.
+Each target's resources go to its default bundle root under the library directory, named after the target, for example `app/lib/usd/usdGeom`.
+The functions write deployed copies of the selected registration descriptors, with `LibraryPath` rewritten for each `LOADABLE` binary in `app/bin`, and a discovery index at a location the plugin registry searches relative to the `plug` binary; [Consumer Install Utilities](#consumer-install-utilities) describes both.
+Python packages keep their package paths under `app/python`, so `pxr/Usd` lands in `app/python/pxr/Usd` with its compiled extension module beside its Python files.
+The `pxr` parent support content comes with the selected child packages, as [Python parent packages](reference.md#python-parent-packages) describes.
+The application still puts `app/python` on its Python import path and supplies binaries its loader can use, because the functions do not change either.
+
+### Subproject Consumer
+
+A project that builds USD as an `EXCLUDE_FROM_ALL` subproject makes the same calls with the same arguments, but it also has to build what it selects:
+
+```cmake
+add_subdirectory(external/OpenUSD EXCLUDE_FROM_ALL)
+add_executable(viewer main.cpp)
+target_link_libraries(viewer PRIVATE usdGeom usdImaging)
+
+get_property(libraries GLOBAL PROPERTY PXR_LIBRARY_TARGETS)
+get_property(extensions GLOBAL PROPERTY PXR_PYTHON_EXTENSION_TARGETS)
+add_dependencies(viewer ${libraries} ${extensions} hdStorm)
+
+pxr_install_targets(
+  TARGETS ${libraries} hdStorm
+  DESTINATION app
+  USD_RUNTIME_TARGET plug
+  USD_RUNTIME_DESTINATION bin
+  PYTHON_DESTINATION python)
+```
+
+The [inventories](#inventories) are available to the parent of an `EXCLUDE_FROM_ALL` subproject, so the project reads them after the `add_subdirectory` call, just as an imported consumer reads them after `find_package`.
+Here they reference the in-tree build and carrier targets rather than exported ones, and the project names the `hdStorm` plugin directly instead of selecting every plugin.
+The `add_dependencies` call makes the application's build also build the selected libraries, the plugin and the compiled extension modules that the selected package owners name.
+
+The built targets deploy through native target installation, so the deployed layout is the same as in the imported example.
+In this mode `PXR_RESOURCE_FILES` and `PXR_PYTHON_FILES` hold in-tree source and build locations, and the functions read the same properties that an imported consumer reads, as [Deployment Metadata](#deployment-metadata) explains.
+Installation never builds anything, so if the project selected a target without building it, the install would fail with a message that names the target, the missing file and the required preparation; [Install diagnostics](reference.md#install-diagnostics) lists this case.
+
+### Third-Party Plugin
+
+A third-party file-format plugin `usdAcme`, shipped in a package `acmeUsdPlugins` and exported as `acme::usdAcme`, follows the [third-party convention](#third-party-plugins).
+Its producer describes the plugin with the optional helper, exports the as-is properties and installs its own content:
+
+```cmake
+find_package(pxr REQUIRED)
+add_library(usdAcme SHARED acmeFileFormat.cpp)
+pxr_set_deployment_metadata(usdAcme
+  RESOURCE_FILES ${CMAKE_CURRENT_BINARY_DIR}/plugInfo.json:resources/plugInfo.json
+  INSTALLED_RESOURCE_FILES share/usdAcme/resources/plugInfo.json:resources/plugInfo.json
+  PLUGIN_REGISTRATIONS resources/plugInfo.json
+  PLUGIN_LOAD_MODE LOADABLE)
+set_property(TARGET usdAcme APPEND PROPERTY EXPORT_PROPERTIES
+  PXR_INSTALLED_RESOURCE_FILES PXR_INSTALLED_PYTHON_FILES PXR_PYTHON_PACKAGE PXR_PYTHON_EXTENSION
+  PXR_PLUGIN_REGISTRATIONS PXR_PLUGIN_LOAD_MODE PXR_DEPLOYMENT_BINARY)
+install(TARGETS usdAcme EXPORT acmeTargets)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/plugInfo.json DESTINATION share/usdAcme/resources)
+install(EXPORT acmeTargets NAMESPACE acme:: DESTINATION lib/cmake/acmeUsdPlugins)
+```
+
+The registered descriptor `resources/plugInfo.json` is one of the owner's resource destinations, as [metadata validation rule](reference.md#metadata-validation-rules) 8 requires, and the plugin's code is in its own shared binary, so its load mode is `LOADABLE`.
+The helper sets and validates the properties but creates no install rules, so the producer still installs the binary, the descriptor and the export itself.
+The producer sets `EXPORT_PROPERTIES` explicitly because whether the helper adds the properties to it is not yet decided.
+A producer that prefers its own CMake code can set the same `PXR_*` properties with `set_target_properties` instead, and USD requires nothing more.
+
+The package config `acmeUsdPluginsConfig.cmake` then loads USD's helpers and its own targets, and resolves the installed metadata:
+
+```cmake
+include(CMakeFindDependencyMacro)
+find_dependency(pxr)
+include(${CMAKE_CURRENT_LIST_DIR}/acmeTargets.cmake)
+get_filename_component(acme_prefix ${CMAKE_CURRENT_LIST_DIR}/../../.. ABSOLUTE)
+pxr_resolve_installed_metadata(
+  TARGETS acme::usdAcme
+  PREFIX ${acme_prefix}
+  EXPORT_NAMES usdAcme acme::usdAcme)
+```
+
+The keyword names of `pxr_set_deployment_metadata` and `pxr_resolve_installed_metadata`, including `EXPORT_NAMES`, are proposed and not yet decided, as [Third-party functions](reference.md#third-party-functions) notes.
+The prefix comes from the config file's own location, so the resolver turns `PXR_INSTALLED_RESOURCE_FILES` into a `PXR_RESOURCE_FILES` entry that points into wherever the package was relocated.
+Loading the package enrolls nothing in the inventories, so a consumer that only links against the package sees no change.
+
+A consumer that wants to ship the plugin registers its target and installs it together with the runtime target it declares, using the same arguments as the imported example:
+
+```cmake
+find_package(acmeUsdPlugins REQUIRED)
+pxr_register_targets(TARGETS acme::usdAcme)
+pxr_install_targets(
+  TARGETS plug acme::usdAcme
+  DESTINATION app
+  USD_RUNTIME_TARGET plug
+  USD_RUNTIME_DESTINATION bin
+  PYTHON_DESTINATION python)
+```
+
+Registration here means enrollment in the inventories so that the plugin can be selected, not registration with USD's runtime plugin registry.
+The package's role lists have no defined variable names, so the consumer names the target directly; it could also read `PXR_PLUGIN_TARGETS` after the registration.
+The call selects `plug` explicitly, because `USD_RUNTIME_TARGET` installs nothing, and `plug` then goes to `app/bin`, which matches the declared runtime placement.
+`plug` is a USD library that may own registrations and Python content, so the call uses `pxr_install_targets` with the runtime and Python arguments rather than `pxr_install_plugins`.
+A real application would also select the libraries it links and that `plug` needs, for example the whole library inventory as in the imported example.
+The plugin's DLL also goes to `app/bin`, and its resources go to its default bundle root, `app/lib/usd/usdAcme`.
+The deployed descriptor copy gets a `LibraryPath` rewritten for the deployed `usdAcme` binary, as [Registration rewriting](reference.md#registration-rewriting) describes for `LOADABLE` entries, and the discovery index includes the descriptors that this call selects.
+USD's plugin registry therefore finds the plugin from the deployed layout alone, with no `PXR_PLUGINPATH_NAME` at launch.
 
 <!-- D06: replace this line with the Alternatives Considered, Risks, Rollout Plan, Later Phase: Plugin Dependency Closure, Future Work and Out of Scope sections -->
